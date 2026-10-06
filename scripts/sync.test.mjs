@@ -921,6 +921,23 @@ describe('api/sync handler', () => {
     assert.ok(logs.length > 0, 'chi tiết lỗi chỉ ghi vào log máy chủ');
   });
 
+  test('không nạp được module máy chủ → 500 JSON nêu nguyên nhân, không sập hàm', async () => {
+    const logs = [];
+    let calls = 0;
+    const handler = createHandler({
+      env: { SHEET_ID: 'x', CRON_SECRET: 'cron-xyz' },
+      loadModules: async () => { calls++; throw Object.assign(new Error("Cannot find package 'firebase-admin' imported from /var/task/server/firebase.js"), { code: 'ERR_MODULE_NOT_FOUND', moduleLoad: true }); },
+      log: { error: (...a) => logs.push(a), warn() {} },
+    });
+    const res = await call(handler, { authorization: 'Bearer cron-xyz' });
+    assert.equal(res.statusCode, 500);
+    assert.match(res.json().error, /không nạp được thư viện.*ERR_MODULE_NOT_FOUND.*firebase-admin/);
+    assert.equal(res.headers['cache-control'], 'no-store');
+    await call(handler, {});
+    assert.equal(calls, 2, 'lần gọi sau thử nạp lại');
+    assert.ok(logs.length >= 1);
+  });
+
   test('lỗi có thông điệp công khai (expose) → trả nguyên thông điệp tiếng Việt', async () => {
     const { handler, src } = make();
     src.failForm = Object.assign(new Error('Không có quyền đọc Google Sheet (gid 948197065).'), { expose: true });

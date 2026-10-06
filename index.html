@@ -25,12 +25,12 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 72 72'%3E%3Crect width='72' height='72' fill='%23D21F36'/%3E%3Cpath d='M62.7 9.36H9.4v53.3h53.3z' fill='none' stroke='white' stroke-width='4'/%3E%3Ccircle cx='36' cy='36' r='18.6' fill='none' stroke='white' stroke-width='4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300..800&display=swap" rel="stylesheet">
 <style>
 /* ================= Tokens (nhận diện Ngôi Sao Hoàng Mai) ================= */
 :root{
   --font:'Lexend',system-ui,-apple-system,'Segoe UI',sans-serif;
-  --font-display:'Literata',Georgia,serif;
+  --font-display:'Lexend',system-ui,-apple-system,'Segoe UI',sans-serif;
   --is-dark:0;
   --page:#F3F4F8; --surface:#FFFFFF; --surface-2:#F7F8FB; --surface-3:#ECEEF5;
   --ink:#141831; --ink-2:#4A5070; --muted:#7D849E; --line:#E3E6EF; --grid:#ECEEF4; --axis:#C6CBDA;
@@ -86,7 +86,7 @@ svg{display:block}
 .brand{display:flex;align-items:center;gap:14px;min-width:0;flex:1 1 420px}
 .brand svg{width:52px;height:52px;flex:none;box-shadow:0 4px 14px rgba(0,0,0,.25)}
 .brand .school{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;opacity:.82;font-weight:500}
-.brand h1{font-family:var(--font-display);font-weight:600;font-size:24px;line-height:1.2;margin:2px 0 0;letter-spacing:-.01em}
+.brand h1{font-family:var(--font-display);font-weight:600;font-size:23px;line-height:1.2;margin:2px 0 0;letter-spacing:-.02em}
 .brand h1 small{font-family:var(--font);font-weight:400;font-size:13px;opacity:.75;margin-left:8px;letter-spacing:0}
 .hdr-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .live{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);padding:6px 12px;border-radius:999px;font-size:12.5px;white-space:nowrap}
@@ -313,7 +313,7 @@ tr:last-child td{border-bottom:0}
 .p-hd{display:flex;align-items:flex-start;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line);background:var(--surface-2)}
 .p-hd .ttl{flex:1;min-width:0}
 .p-hd .ttl .k{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--brand);font-weight:600}
-.p-hd .ttl h3{margin:2px 0 0;font-size:19px;font-family:var(--font-display);font-weight:600;line-height:1.25}
+.p-hd .ttl h3{margin:2px 0 0;font-size:18px;font-family:var(--font-display);font-weight:600;line-height:1.3;letter-spacing:-.01em}
 .p-hd .ttl p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
 .xbtn{border:1px solid var(--line);background:var(--surface);border-radius:9px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;flex:none;color:var(--ink-2)}
 .xbtn:hover{background:var(--surface-3);color:var(--ink)}
@@ -416,7 +416,7 @@ tr:last-child td{border-bottom:0}
 .gate-brand .school{font-size:12px;letter-spacing:.09em;text-transform:uppercase;font-weight:500;line-height:1.55;opacity:.9}
 .gate-copy{margin:auto 0;max-width:540px}
 .gate-rule{display:block;width:44px;height:4px;border-radius:2px;background:var(--brand);margin-bottom:22px}
-.gate-copy h1{font-family:var(--font-display);font-weight:600;font-size:clamp(32px,3.4vw,48px);line-height:1.12;letter-spacing:-.015em;margin:0 0 18px}
+.gate-copy h1{font-family:var(--font-display);font-weight:600;font-size:clamp(30px,3.2vw,44px);line-height:1.15;letter-spacing:-.025em;margin:0 0 18px}
 .gate-copy p{margin:0 0 28px;font-size:15.5px;line-height:1.65;color:rgba(255,255,255,.82);max-width:480px}
 .gate-pts{list-style:none;margin:0;padding:0;display:grid;gap:12px}
 .gate-pts li{display:flex;gap:12px;align-items:center;font-size:14px;color:rgba(255,255,255,.92)}
@@ -426,7 +426,7 @@ tr:last-child td{border-bottom:0}
 .gate-side{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:40px 28px}
 .gate-card{width:100%;max-width:430px;background:var(--surface);border:1px solid var(--line);border-radius:20px;box-shadow:0 1px 2px rgba(20,24,49,.05),0 18px 50px rgba(20,24,49,.10);padding:34px 32px 30px}
 .gc-k{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--brand);font-weight:600}
-.gate-card h2{font-family:var(--font-display);font-weight:600;font-size:26px;line-height:1.2;margin:6px 0 8px;letter-spacing:-.01em}
+.gate-card h2{font-family:var(--font-display);font-weight:600;font-size:24px;line-height:1.25;margin:6px 0 8px;letter-spacing:-.02em}
 .gc-lead{margin:0 0 24px;color:var(--ink-2);font-size:14px;line-height:1.55}
 .gc-lead b{color:var(--ink);font-weight:600;overflow-wrap:anywhere}
 .ms-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:12px;height:50px;padding:0 16px;border-radius:12px;border:1px solid #8C8C8C;background:#fff;color:#2F2F2F;font-weight:600;font-size:15px;cursor:pointer;transition:background .15s,box-shadow .15s}

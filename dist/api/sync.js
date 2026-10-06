@@ -8,30 +8,11 @@
 //               durationMs, syncedAtMs, trigger, … }; 401/403 khi không được phép, 409 khi đang có lượt khác,
 //               429 khi người dùng gọi lại < 60 s sau một lượt đồng bộ thất bại, 500 khi lỗi.
 // firebase-admin chỉ được khởi tạo khi cần (sau khi đã có token), nên các nhánh 401 chạy được cả khi chưa có service account.
-// Các thư viện nặng (firebase-admin, google-auth-library) được nạp động bên trong handler: nếu nạp lỗi trên Vercel,
-// hàm trả JSON 500 nêu rõ nguyên nhân thay vì sập (FUNCTION_INVOCATION_FAILED).
 // Điều kiện bảo mật của đăng nhập Microsoft (App registration SINGLE-TENANT): xem server/auth.js.
 import { authorize } from '../server/auth.js';
-
-const ACCESS_PATH = 'config/access';
-
-// Nạp các module máy chủ một lần cho mỗi instance; lỗi nạp không được cache để lần sau thử lại.
-let modsPromise = null;
-export function loadServerModules() {
-  modsPromise ||= Promise.all([
-    import('../server/sync.js'),
-    import('../server/sheet.js'),
-    import('../server/firebase.js'),
-  ]).then(([sync, sheet, firebase]) => ({ ...sync, ...sheet, ...firebase }))
-    .catch(e => { modsPromise = null; throw Object.assign(e, { moduleLoad: true }); });
-  return modsPromise;
-}
-
-// Mô tả lỗi ngắn gọn để chẩn đoán (không kèm stack, che mọi khóa PEM).
-function errorDetail(e) {
-  const first = String(e?.message || e || '').split('\n')[0].replace(/-----BEGIN[\s\S]*?-----END[^-]*-----/g, '[đã ẩn]');
-  return [e?.code, first].filter(Boolean).join(': ').slice(0, 240);
-}
+import { runSync, firestoreStore, readSyncConfig, PATHS } from '../server/sync.js';
+import { makeSheetFetcher } from '../server/sheet.js';
+import { getDb, getAdminAuth, getServiceAccount } from '../server/firebase.js';
 
 const PUBLIC_FIELDS = [
   'ok', 'skipped', 'count', 'added', 'updated', 'removed', 'chunksWritten', 'chunksDeleted',
@@ -49,7 +30,6 @@ export function friendlyError(e) {
   if (code === 7 || code === 'permission-denied' || /PERMISSION_DENIED/.test(msg)) return 'Service account không có quyền ghi Firestore (cần vai trò “Cloud Datastore User” hoặc “Firebase Admin SDK Administrator”).';
   if (code === 8 || /RESOURCE_EXHAUSTED|quota/i.test(msg)) return 'Đã vượt hạn mức Firestore. Vui lòng thử lại sau.';
   if (code === 16 || /UNAUTHENTICATED|invalid_grant|invalid_client/i.test(msg)) return 'Service account Firebase không hợp lệ hoặc khóa đã bị thu hồi.';
-  if (e?.moduleLoad) return `Máy chủ không nạp được thư viện (${errorDetail(e)}). Hãy Redeploy trên Vercel; nếu vẫn lỗi, gửi thông báo này cho quản trị.`;
   return 'Lỗi máy chủ khi đồng bộ dữ liệu. Xem log của hàm /api/sync trên Vercel để biết chi tiết.';
 }
 
@@ -60,6 +40,9 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function serviceAccountOrNull() {
+  try { return getServiceAccount(); } catch { return null; }
+}
 
 /**
  * Tạo handler với các phụ thuộc có thể thay thế (phục vụ kiểm thử).
@@ -74,18 +57,12 @@ function send(res, status, body) {
 export function createHandler(deps = {}) {
   const {
     env = process.env,
-    loadModules = loadServerModules,
+    getStore = () => firestoreStore(getDb()),
+    verifyIdToken = token => getAdminAuth().verifyIdToken(token),
+    makeFetchTable = ({ sheetId }) => makeSheetFetcher({ sheetId, serviceAccount: serviceAccountOrNull() }),
     now = Date.now,
     log = console,
   } = deps;
-  // Phụ thuộc mặc định dùng các module nạp động (m); kiểm thử có thể thay thế từng cái.
-  const getStore = deps.getStore || (m => m.firestoreStore(m.getDb()));
-  const verifyIdTokenWith = deps.verifyIdToken ? (() => deps.verifyIdToken) : (m => token => m.getAdminAuth().verifyIdToken(token));
-  const makeFetchTable = deps.makeFetchTable || ((p, m) => {
-    let serviceAccount = null;
-    try { serviceAccount = m.getServiceAccount(); } catch { /* chưa cấu hình → đọc Sheet công khai */ }
-    return m.makeSheetFetcher({ sheetId: p.sheetId, serviceAccount });
-  });
 
   return async function handler(req, res) {
     if (req.method !== 'GET' && req.method !== 'POST') {
@@ -93,24 +70,16 @@ export function createHandler(deps = {}) {
       return send(res, 405, { ok: false, error: 'Phương thức không được hỗ trợ (chỉ GET hoặc POST).' });
     }
 
-    let mods;
-    try {
-      mods = await loadModules();
-    } catch (e) {
-      log.error('[sync] không nạp được module máy chủ:', e);
-      return send(res, 500, { ok: false, error: friendlyError(e) });
-    }
-
     let store = null;
-    const lazyStore = () => (store ||= getStore(mods));
+    const lazyStore = () => (store ||= getStore());
 
     let auth;
     try {
       auth = await authorize({
         authorization: req.headers?.authorization,
         env,
-        verifyIdToken: verifyIdTokenWith(mods),
-        getAccess: () => lazyStore().get(mods.PATHS?.access || ACCESS_PATH),
+        verifyIdToken,
+        getAccess: () => lazyStore().get(PATHS.access),
       });
     } catch (e) {
       log.error('[sync] lỗi khi xác thực:', e);
@@ -118,7 +87,7 @@ export function createHandler(deps = {}) {
     }
     if (!auth.ok) return send(res, auth.status, { ok: false, error: auth.error });
 
-    const cfg = mods.readSyncConfig(env);
+    const cfg = readSyncConfig(env);
     if (!cfg.sheetId) return send(res, 500, { ok: false, error: 'Chưa cấu hình biến môi trường SHEET_ID trên Vercel.', trigger: auth.trigger });
 
     let force = false;
@@ -128,9 +97,9 @@ export function createHandler(deps = {}) {
     } catch { /* bỏ qua URL lỗi */ }
 
     try {
-      const result = await mods.runSync({
+      const result = await runSync({
         store: lazyStore(),
-        fetchTable: makeFetchTable({ sheetId: cfg.sheetId, env }, mods),
+        fetchTable: makeFetchTable({ sheetId: cfg.sheetId, env }),
         env,
         trigger: auth.trigger,
         nowMs: now(),
