@@ -1,0 +1,95 @@
+rules_version = '2';
+
+// Quy tắc bảo mật Firestore – Dashboard dự giờ, Trường Tiểu học, THCS & THPT Ngôi Sao Hoàng Mai.
+//
+// ĐĂNG NHẬP: CHỈ bằng tài khoản Microsoft 365 của trường (Firebase Auth, nhà cung cấp 'microsoft.com').
+//
+// • Client CHỈ ĐƯỢC ĐỌC dashboard/*, dashboard_chunks/*, phieu/* khi:
+//     – đã đăng nhập bằng Microsoft (request.auth.token.firebase.sign_in_provider == 'microsoft.com'),
+//     – token có email (khác rỗng), và
+//     – email (viết thường) có đúng MỘT dấu '@', và
+//     – email nằm trong config/access.emails
+//       HOẶC tên miền của email (phần sau dấu '@', viết thường) nằm trong config/access.domains.
+//   config/access do /api/sync ghi; nếu tài liệu này chưa tồn tại (chưa đồng bộ lần nào) → từ chối tất cả.
+//
+// • KHÔNG kiểm tra email_verified: Firebase luôn báo email_verified = false với tài khoản Microsoft.
+//   ⚠ ĐIỀU KIỆN BẮT BUỘC để tin được trường email: App registration trên Microsoft Entra mà Firebase dùng
+//   phải là SINGLE-TENANT (“Accounts in this organizational directory only”), redirect URI
+//   https://dugiotih.firebaseapp.com/__/auth/handler. Khi đó Entra chỉ cấp token cho tài khoản thuộc thư mục
+//   của trường – nơi chỉ quản trị viên của trường đặt được email. Nếu app là multi-tenant, quản trị viên của
+//   BẤT KỲ tenant nào cũng có thể gán email “…@hoangmaistarschool.edu.vn” cho người dùng của họ và đăng nhập
+//   (kiểu tấn công “nOAuth”). Xem README.md, mục “Bảo mật đăng nhập Microsoft 365”.
+//
+// • Không client nào được GHI ở bất kỳ đâu. Dữ liệu chỉ do /api/sync ghi bằng Firebase Admin SDK
+//   (Admin SDK không chịu ràng buộc của rules).
+// • config/* (danh sách quyền, trạng thái đồng bộ, khóa đồng bộ) không client nào đọc được.
+// • Mọi đường dẫn khác: từ chối.
+//
+// Triển khai: npx firebase-tools deploy --only firestore:rules,firestore:indexes
+// (hoặc dán nội dung tệp này vào Firebase console → Firestore Database → Rules → Publish).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Tài liệu danh sách quyền xem (do /api/sync ghi): { emails: string[], domains: string[], updatedAt }.
+    function accessPath() {
+      return /databases/$(database)/documents/config/access;
+    }
+
+    // Đăng nhập bằng Microsoft 365 và token có email khác rỗng.
+    // Dùng .get(…, mặc định) để thiếu trường thì trả về false thay vì lỗi.
+    function isMicrosoftUserWithEmail() {
+      return request.auth != null
+        && request.auth.token.get('firebase', {}).get('sign_in_provider', '') == 'microsoft.com'
+        && request.auth.token.get('email', '') is string
+        && request.auth.token.get('email', '').size() > 0;
+    }
+
+    // acc: dữ liệu của config/access; email: đã viết thường.
+    // Email phải có ĐÚNG MỘT dấu '@' (chặn dạng “a@evil.com@truong.edu.vn”); tên miền = phần sau dấu '@'.
+    // Thiếu trường / sai kiểu → coi như danh sách rỗng (từ chối).
+    function isListed(acc, email) {
+      let emails = acc.get('emails', []);
+      let domains = acc.get('domains', []);
+      let parts = email.split('@');
+      return parts.size() == 2 && parts[0].size() > 0 && parts[1].size() > 0
+        && ((emails is list && email in emails)
+          || (domains is list && parts[1] in domains));
+    }
+
+    // Người được xem dashboard. config/access chưa tồn tại → từ chối.
+    function canView() {
+      return isMicrosoftUserWithEmail()
+        && exists(accessPath())
+        && isListed(get(accessPath()).data, request.auth.token.email.lower());
+    }
+
+    // dashboard/meta, dashboard/staff
+    match /dashboard/{docId} {
+      allow read: if canView();
+      allow write: if false;
+    }
+
+    // dashboard_chunks/{c000, c001, …} – phiếu dạng gọn (chuỗi JSON) mà dashboard đọc
+    match /dashboard_chunks/{chunkId} {
+      allow read: if canView();
+      allow write: if false;
+    }
+
+    // phieu/{recordId} – mỗi phiếu một tài liệu (xem trong console / ứng dụng khác)
+    match /phieu/{recordId} {
+      allow read: if canView();
+      allow write: if false;
+    }
+
+    // config/access, config/syncState, config/syncLock – chỉ máy chủ (Admin SDK).
+    match /config/{docId} {
+      allow read, write: if false;
+    }
+
+    // Mọi thứ khác: từ chối (khai báo rõ cho dễ đọc; mặc định cũng đã từ chối).
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

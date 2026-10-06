@@ -1,0 +1,45 @@
+# Thư viện cài bằng npm
+node_modules/
+
+# Biến môi trường / bí mật (chỉ commit .env.example)
+.env
+.env.*
+!.env.example
+*.local
+
+# Vercel CLI
+.vercel
+
+# Dữ liệu xem trước cục bộ (chứa dữ liệu phiếu thật) – không đưa lên repo công khai
+dev-data.json
+
+# Dashboard cũ dạng tệp đơn (có nhúng Sheet ID) – không đưa lên repo công khai
+dashboard-du-gio.html
+
+# Khóa service account / chứng chỉ – TUYỆT ĐỐI không commit
+*service-account*.json
+*service_account*.json
+*serviceAccount*.json
+serviceAccount*.json
+*firebase-adminsdk*.json
+*-sa-key*.json
+dugiotih-*.json
+credentials*.json
+key.json
+sa.json
+*.pem
+*.p12
+*.key
+
+# Firebase CLI
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# Nhật ký npm
+npm-debug.log*
+
+# Hệ điều hành / công cụ
+.DS_Store
+.claude/

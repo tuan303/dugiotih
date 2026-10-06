@@ -1,0 +1,34 @@
+# Tệp KHÔNG được tải lên Vercel khi deploy bằng Vercel CLI (`vercel`, `vercel --prod`).
+# Vercel CLI KHÔNG đọc .gitignore; với preset “Other”, mọi tệp được tải lên đều có thể thành URL tĩnh công khai.
+# (Deploy qua GitHub chỉ có các tệp đã commit – .gitignore đã loại các tệp dưới đây.)
+# KHÔNG thêm api/, server/, lib/ vào đây: /api/sync cần các thư mục đó.
+
+# Bí mật / biến môi trường cục bộ
+.env
+.env.*
+!.env.example
+*.local
+
+# Dữ liệu thật (phiếu đánh giá, mã Google Sheet)
+dev-data.json
+dashboard-du-gio.html
+
+# Khóa service account / chứng chỉ
+*service-account*.json
+*service_account*.json
+*serviceAccount*.json
+*firebase-adminsdk*.json
+*-sa-key*.json
+dugiotih-*.json
+credentials*.json
+key.json
+sa.json
+*.pem
+*.p12
+*.key
+
+# Công cụ / thư mục chỉ dùng khi phát triển
+.claude/
+.firebase/
+.vercel/
+scripts/
