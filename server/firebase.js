@@ -3,7 +3,9 @@
 //   Cách 2: FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY (xuống dòng viết dạng \n)
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { initializeFirestore, getFirestore } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
+// KHÔNG import 'firebase-admin/auth': nó kéo jwks-rsa → require('jose') (ESM) gây ERR_REQUIRE_ESM trên Vercel.
+// ID token được xác minh bằng server/verify-token.js (jose, import ESM).
+import { verifyFirebaseIdToken } from './verify-token.js';
 
 const APP_NAME = 'dugiotih-server';
 const publicError = (message, code) => Object.assign(new Error(message), { expose: true, code });
@@ -83,9 +85,14 @@ export function getDb() {
   return db;
 }
 
-/** Firebase Auth (để xác minh ID token của người dùng). */
+/** Xác minh ID token của người dùng (cùng giao diện verifyIdToken như firebase-admin/auth). */
 export function getAdminAuth() {
   if (auth) return auth;
-  auth = getAuth(getAdminApp());
+  const sa = getServiceAccount();
+  const projectId = sa?.project_id || String(process.env.FIREBASE_PROJECT_ID || '').trim();
+  if (!sa || !projectId) {
+    throw publicError('Chưa cấu hình service account Firebase trên Vercel: đặt FIREBASE_SERVICE_ACCOUNT (nội dung file JSON) hoặc FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.', 'CONFIG_FIREBASE');
+  }
+  auth = { verifyIdToken: token => verifyFirebaseIdToken(token, projectId) };
   return auth;
 }
