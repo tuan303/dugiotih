@@ -43,3 +43,6 @@ npm-debug.log*
 # Hệ điều hành / công cụ
 .DS_Store
 .claude/
+
+# Thư mục build/trace tạm
+dist/
