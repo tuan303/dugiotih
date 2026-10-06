@@ -55,6 +55,16 @@ export function getServiceAccount(env = process.env) {
   return sa;
 }
 
+// Chỉ liệt kê TÊN biến cấu hình (không bao giờ giá trị) để chẩn đoán: thiếu biến, sai tên, sai môi trường, chưa Redeploy.
+export function configNamesHint(env = process.env) {
+  const names = Object.keys(env).filter(k => /firebase|sheet|secret|allowed|access_from/i.test(k)).sort();
+  const where = env.VERCEL_ENV ? `môi trường Vercel: ${env.VERCEL_ENV}` : 'không chạy trên Vercel';
+  return `${where}; biến cấu hình đang thấy: ${names.length ? names.join(', ') : '(không có)'}`;
+}
+function missingServiceAccountError(env = process.env) {
+  return publicError(`Chưa cấu hình service account Firebase trên Vercel: đặt FIREBASE_SERVICE_ACCOUNT (nội dung file JSON) hoặc FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY, rồi Redeploy. (${configNamesHint(env)})`, 'CONFIG_FIREBASE');
+}
+
 let app = null, db = null, auth = null;
 
 function getAdminApp() {
@@ -63,7 +73,7 @@ function getAdminApp() {
   if (existing) return (app = existing);
   const sa = getServiceAccount();
   if (!sa) {
-    throw publicError('Chưa cấu hình service account Firebase trên Vercel: đặt FIREBASE_SERVICE_ACCOUNT (nội dung file JSON) hoặc FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.', 'CONFIG_FIREBASE');
+    throw missingServiceAccountError();
   }
   app = initializeApp({
     credential: cert({ projectId: sa.project_id, clientEmail: sa.client_email, privateKey: sa.private_key }),
@@ -91,7 +101,7 @@ export function getAdminAuth() {
   const sa = getServiceAccount();
   const projectId = sa?.project_id || String(process.env.FIREBASE_PROJECT_ID || '').trim();
   if (!sa || !projectId) {
-    throw publicError('Chưa cấu hình service account Firebase trên Vercel: đặt FIREBASE_SERVICE_ACCOUNT (nội dung file JSON) hoặc FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.', 'CONFIG_FIREBASE');
+    throw missingServiceAccountError();
   }
   auth = { verifyIdToken: token => verifyFirebaseIdToken(token, projectId) };
   return auth;
