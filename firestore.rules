@@ -2,23 +2,14 @@ rules_version = '2';
 
 // Quy tắc bảo mật Firestore – Dashboard dự giờ, Trường Tiểu học, THCS & THPT Ngôi Sao Hoàng Mai.
 //
-// Tệp này chứa quy tắc của CẢ HAI phiên bản, dùng chung một cơ sở dữ liệu:
-//   • v1 (Tiểu học, nhánh main đang chạy): dashboard/*, dashboard_chunks/*, phieu/*, config/*
-//   • v2 (Dashboard toàn trường – 3 cấp, phân quyền theo vai trò): v2_meta/*, v2_access/*, v2_scopes/**, v2_config/*
-// Hai phiên bản không đọc/ghi dữ liệu của nhau → dán tệp này lên Firebase sớm cũng không ảnh hưởng bản v1 đang chạy.
-// Khi đã chuyển hẳn sang v2 và xóa dữ liệu v1, có thể bỏ phần v1 (xem README, mục “Chuyển sang v2”).
+// Bản v2 (Dashboard toàn trường – 3 cấp, phân quyền theo vai trò): v2_meta/*, v2_access/*, v2_scopes/**, v2_config/*.
+// Dữ liệu của bản v1 cũ (dashboard/*, dashboard_chunks/*, phieu/*, config/*) KHÔNG còn client nào đọc được: v1 cho mọi
+// tài khoản của trường xem toàn bộ phiếu Tiểu học, nên giữ quy tắc đó sẽ vượt qua phân quyền của v2. Có thể xóa hẳn các
+// collection v1 trong Firebase console khi không cần nữa.
 //
 // ĐĂNG NHẬP: CHỈ bằng tài khoản Microsoft 365 của trường (Firebase Auth, nhà cung cấp 'microsoft.com').
 //
-// ───────────── v1 ─────────────
-// • Client CHỈ ĐƯỢC ĐỌC dashboard/*, dashboard_chunks/*, phieu/* khi:
-//     – đã đăng nhập bằng Microsoft (request.auth.token.firebase.sign_in_provider == 'microsoft.com'),
-//     – token có email (khác rỗng), và
-//     – email (viết thường) có đúng MỘT dấu '@', và
-//     – email nằm trong config/access.emails
-//       HOẶC tên miền của email (phần sau dấu '@', viết thường) nằm trong config/access.domains.
-//   config/access do /api/sync ghi; nếu tài liệu này chưa tồn tại (chưa đồng bộ lần nào) → từ chối tất cả.
-//
+// ───────────── Đăng nhập ─────────────
 // • KHÔNG kiểm tra email_verified: Firebase luôn báo email_verified = false với tài khoản Microsoft.
 //   ⚠ ĐIỀU KIỆN BẮT BUỘC để tin được trường email: App registration trên Microsoft Entra mà Firebase dùng
 //   phải là SINGLE-TENANT (“Accounts in this organizational directory only”), redirect URI
@@ -29,8 +20,7 @@ rules_version = '2';
 //
 // • Không client nào được GHI ở bất kỳ đâu. Dữ liệu chỉ do /api/sync ghi bằng Firebase Admin SDK
 //   (Admin SDK không chịu ràng buộc của rules).
-// • config/* (danh sách quyền, trạng thái đồng bộ, khóa đồng bộ) không client nào đọc được.
-// • Mọi đường dẫn khác: từ chối.
+// • Mọi đường dẫn khác (kể cả dữ liệu v1 cũ): từ chối.
 //
 // ───────────── v2 – Dashboard toàn trường ─────────────
 // Mỗi người dùng có MỘT tài liệu v2_access/{email viết thường} do /api/sync ghi, liệt kê các “phạm vi” (scope) được xem:
@@ -43,7 +33,7 @@ rules_version = '2';
 //   v2_access/{email của mình}.scopes. Không có tài liệu v2_access (chưa được cấp quyền / “Không truy cập”) → từ chối.
 // • v2_config/* (mã băm, số liệu đối sánh đã công bố, người kích hoạt lượt đồng bộ gần nhất, khóa đồng bộ, giới hạn tần
 //   suất, bản lưu “DS Nhân sự”/“Phân quyền” có email): không client nào đọc/ghi được.
-// • Cùng điều kiện đăng nhập như v1: nhà cung cấp 'microsoft.com', có email; email phải có đúng một '@' và không chứa
+// • Điều kiện đăng nhập: nhà cung cấp 'microsoft.com', có email; email phải có đúng một '@' và không chứa
 //   '/' (để dùng an toàn làm mã tài liệu). Điều kiện App registration SINGLE-TENANT ở trên áp dụng y hệt.
 // • ⚠ Quyền v2 gắn với EMAIL trong token → BẮT BUỘC bật Firebase Authentication → Settings → User actions →
 //   “Email enumeration protection” (khi tắt, người đã đăng nhập tự đổi được email tài khoản của mình thành email của BGH
@@ -55,11 +45,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Tài liệu danh sách quyền xem (do /api/sync ghi): { emails: string[], domains: string[], updatedAt }.
-    function accessPath() {
-      return /databases/$(database)/documents/config/access;
-    }
-
     // Đăng nhập bằng Microsoft 365 và token có email khác rỗng.
     // Dùng .get(…, mặc định) để thiếu trường thì trả về false thay vì lỗi.
     function isMicrosoftUserWithEmail() {
@@ -67,48 +52,6 @@ service cloud.firestore {
         && request.auth.token.get('firebase', {}).get('sign_in_provider', '') == 'microsoft.com'
         && request.auth.token.get('email', '') is string
         && request.auth.token.get('email', '').size() > 0;
-    }
-
-    // acc: dữ liệu của config/access; email: đã viết thường.
-    // Email phải có ĐÚNG MỘT dấu '@' (chặn dạng “a@evil.com@truong.edu.vn”); tên miền = phần sau dấu '@'.
-    // Thiếu trường / sai kiểu → coi như danh sách rỗng (từ chối).
-    function isListed(acc, email) {
-      let emails = acc.get('emails', []);
-      let domains = acc.get('domains', []);
-      let parts = email.split('@');
-      return parts.size() == 2 && parts[0].size() > 0 && parts[1].size() > 0
-        && ((emails is list && email in emails)
-          || (domains is list && parts[1] in domains));
-    }
-
-    // Người được xem dashboard. config/access chưa tồn tại → từ chối.
-    function canView() {
-      return isMicrosoftUserWithEmail()
-        && exists(accessPath())
-        && isListed(get(accessPath()).data, request.auth.token.email.lower());
-    }
-
-    // dashboard/meta, dashboard/staff
-    match /dashboard/{docId} {
-      allow read: if canView();
-      allow write: if false;
-    }
-
-    // dashboard_chunks/{c000, c001, …} – phiếu dạng gọn (chuỗi JSON) mà dashboard đọc
-    match /dashboard_chunks/{chunkId} {
-      allow read: if canView();
-      allow write: if false;
-    }
-
-    // phieu/{recordId} – mỗi phiếu một tài liệu (xem trong console / ứng dụng khác)
-    match /phieu/{recordId} {
-      allow read: if canView();
-      allow write: if false;
-    }
-
-    // config/access, config/syncState, config/syncLock – chỉ máy chủ (Admin SDK).
-    match /config/{docId} {
-      allow read, write: if false;
     }
 
     // ===================== v2 – Dashboard toàn trường =====================

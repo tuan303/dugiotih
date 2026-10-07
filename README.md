@@ -348,8 +348,10 @@ gián đoạn):
 
 ### Security Rules v2 (bản dán vào Firebase console)
 
-`firestore.rules` chứa quy tắc của **cả v1 và v2** (v1 giữ nguyên, v2 thêm các bộ sưu tập `v2_*`), có chú thích tiếng
-Việt cho từng quy tắc. Dán sớm cũng **không ảnh hưởng** bản v1 đang chạy. Cách triển khai: `npx firebase-tools deploy
+`firestore.rules` chỉ còn quy tắc của **v2** (các bộ sưu tập `v2_*`), có chú thích tiếng Việt cho từng quy tắc. Dữ liệu
+v1 cũ (`dashboard/*`, `dashboard_chunks/*`, `phieu/*`, `config/*`) **không còn ai đọc được** – v1 cho mọi tài khoản của
+trường xem toàn bộ phiếu Tiểu học, giữ lại sẽ vượt qua phân quyền v2. **Chỉ dán khối này SAU khi bản v2 đã lên
+Production** (bản v1 cần quy tắc cũ để chạy). Cách triển khai: `npx firebase-tools deploy
 --only firestore:rules,firestore:indexes` (xem [bước 4](#4-triển-khai-security-rules-và-chỉ-mục)), hoặc Firebase console
 → **Firestore Database → Rules** → xóa toàn bộ nội dung cũ → dán khối dưới đây → **Publish**. Khối này giống hệt
 `firestore.rules` nhưng đã bỏ chú thích; khi sửa rules, sửa `firestore.rules` trước rồi cập nhật lại khối này.
@@ -361,49 +363,11 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function accessPath() {
-      return /databases/$(database)/documents/config/access;
-    }
-
     function isMicrosoftUserWithEmail() {
       return request.auth != null
         && request.auth.token.get('firebase', {}).get('sign_in_provider', '') == 'microsoft.com'
         && request.auth.token.get('email', '') is string
         && request.auth.token.get('email', '').size() > 0;
-    }
-
-    function isListed(acc, email) {
-      let emails = acc.get('emails', []);
-      let domains = acc.get('domains', []);
-      let parts = email.split('@');
-      return parts.size() == 2 && parts[0].size() > 0 && parts[1].size() > 0
-        && ((emails is list && email in emails)
-          || (domains is list && parts[1] in domains));
-    }
-
-    function canView() {
-      return isMicrosoftUserWithEmail()
-        && exists(accessPath())
-        && isListed(get(accessPath()).data, request.auth.token.email.lower());
-    }
-
-    match /dashboard/{docId} {
-      allow read: if canView();
-      allow write: if false;
-    }
-
-    match /dashboard_chunks/{chunkId} {
-      allow read: if canView();
-      allow write: if false;
-    }
-
-    match /phieu/{recordId} {
-      allow read: if canView();
-      allow write: if false;
-    }
-
-    match /config/{docId} {
-      allow read, write: if false;
     }
 
     function myEmail() {
