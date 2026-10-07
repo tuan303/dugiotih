@@ -38,9 +38,10 @@ function errorDetail(e) {
 const PUBLIC_FIELDS = [
   'ok', 'skipped', 'count', 'added', 'updated', 'removed', 'levels', 'scopes', 'scopesWritten', 'scopesDeleted', 'chunksWritten', 'chunksDeleted',
   'accessCount', 'accessWritten', 'accessDeleted', 'durationMs', 'syncedAtMs', 'trigger', 'runs', 'retryAfterMs',
+  'partial', 'pending', // lượt đồng bộ lớn đã ghi một phần (trạng thái đã lưu) – trình duyệt gọi tiếp để ghi phần còn lại
 ];
 // Tài khoản cùng tên miền nhưng CHƯA được cấp quyền xem (không có v2_access): chỉ biết lượt đồng bộ chạy hay chưa.
-const MINIMAL_FIELDS = ['ok', 'skipped', 'durationMs', 'syncedAtMs', 'retryAfterMs'];
+const MINIMAL_FIELDS = ['ok', 'skipped', 'durationMs', 'syncedAtMs', 'retryAfterMs', 'partial'];
 const pick = (r, fields = PUBLIC_FIELDS) => Object.fromEntries(fields.filter(k => r[k] !== undefined).map(k => [k, r[k]]));
 
 // Thông báo lỗi an toàn (không lộ bí mật/stack). Lỗi do ta tạo (expose) giữ nguyên nội dung.

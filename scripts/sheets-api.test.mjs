@@ -196,3 +196,100 @@ describe('runSync – số phiếu giảm bất thường (vd. Sheet đang lọc
     assert.ok(r.warnings.some(w => /Sheets API chưa được bật/.test(w)));
   });
 });
+
+/* ---------- Đồng bộ lớn: ghi song song, dừng đúng hạn, lưu tiến độ và ghi tiếp ---------- */
+import { commitGroupsUntil, SYNC_BUDGET_MS } from '../server/sync.js';
+
+describe('commitGroupsUntil – ghi song song có hạn chót', () => {
+  const op = (i, big = 0) => ({ type: 'set', path: `c/d${i}`, data: { i, pad: 'x'.repeat(big) } });
+  test('ghi hết khi còn thời gian; nhóm quá lớn bị tách nhiều lô vẫn được đánh dấu xong đúng lúc', async () => {
+    const store = memoryStore();
+    const groups = [[op(1)], Array.from({ length: 900 }, (_, i) => op(100 + i)), [op(2), op(3)]];
+    const r = await commitGroupsUntil(store, groups, { concurrency: 3 });
+    assert.equal(r.timedOut, false);
+    assert.deepEqual([...r.done].sort(), [0, 1, 2]);
+    assert.equal(Object.keys(store.dump('c/')).length, 903);
+  });
+  test('quá hạn: không bắt đầu lô mới, chỉ các nhóm ghi trọn mới vào `done`', async () => {
+    let now = 0;
+    const store = memoryStore();
+    const orig = store.commitBatch.bind(store);
+    store.commitBatch = async b => { now += 10_000; return orig(b); };
+    const groups = Array.from({ length: 6 }, (_, g) => Array.from({ length: 300 }, (_, i) => op(g * 1000 + i)));
+    const r = await commitGroupsUntil(store, groups, { clock: () => now, deadline: 15_000, concurrency: 1 });
+    assert.equal(r.timedOut, true);
+    assert.ok(r.done.size >= 1 && r.done.size < 6);
+    for (const gi of r.done) assert.ok(store.dump(`c/d${gi * 1000}`)[`c/d${gi * 1000}`], 'nhóm “xong” thật sự đã có trên kho');
+  });
+});
+
+describe('runSync – lượt đồng bộ vượt ngân sách thời gian', () => {
+  const stripTimes = obj => JSON.parse(JSON.stringify(obj, (k, v) => (k === 'syncedAtMs' || k === 'updatedAtMs' ? undefined : v)));
+  async function fullReference() {
+    const store = memoryStore({ clock: () => T0 });
+    await runSync({ store, fetchTable: makeSource({ tihN: 300, thcsN: 120 }).fetchTable, env: BASE_ENV, trigger: 'cron', nowMs: () => T0, log: silentLog });
+    return store;
+  }
+  test('mỗi lượt dừng đúng hạn, lưu tiến độ; các lượt sau ghi tiếp tới khi xong – kết quả giống hệt một lượt trọn vẹn', async () => {
+    let now = T0;
+    const store = memoryStore({ clock: () => now });
+    const orig = store.commitBatch.bind(store);
+    store.commitBatch = async b => { now += 8_000; return orig(b); }; // Firestore chậm: 8 s mỗi lô
+    const src = makeSource({ tihN: 300, thcsN: 120 });
+    const env = { ...BASE_ENV, SYNC_BUDGET_MS: '5000' };
+    const runs = [];
+    for (let i = 0; i < 25; i++) {
+      now += 70_000;
+      const r = await runSync({ store, fetchTable: src.fetchTable, env, trigger: 'user:a@x.vn', nowMs: () => now, log: silentLog });
+      runs.push(r);
+      if (!r.partial) break;
+    }
+    assert.ok(runs[0].partial, 'lượt đầu không kịp ghi hết');
+    assert.ok(runs.at(-1).ok && !runs.at(-1).partial, `hoàn tất sau ${runs.length} lượt`);
+    assert.ok(runs.filter(r => r.partial).every(r => r.pending > 0 && r.warnings.some(w => /ghi một phần/.test(w))));
+    assert.equal((await store.get(PATHS.state)).partial, false);
+    const ref = await fullReference();
+    for (const prefix of ['v2_scopes/', 'v2_access/']) assert.deepEqual(stripTimes(store.dump(prefix)), stripTimes(ref.dump(prefix)), prefix);
+    assert.ok(await store.get(PATHS.meta), 'meta được ghi khi hoàn tất');
+  });
+  test('hết giờ GIỮA LÚC đang ghi các phạm vi (lô nhỏ): vẫn hội tụ về đúng kết quả của một lượt trọn vẹn', async () => {
+    let now = T0;
+    const store = memoryStore({ clock: () => now });
+    const orig = store.commitBatch.bind(store);
+    let commits = 0;
+    store.commitBatch = async b => { commits++; now += 3_000; return orig(b); };
+    const src = makeSource({ tihN: 300, thcsN: 120 });
+    const env = { ...BASE_ENV, SYNC_BUDGET_MS: '7000', SYNC_BATCH_OPS: '6' };
+    const runs = [];
+    for (let i = 0; i < 60; i++) {
+      now += 70_000;
+      const r = await runSync({ store, fetchTable: src.fetchTable, env, trigger: 'cron', nowMs: () => now, log: silentLog });
+      runs.push(r);
+      if (!r.partial) break;
+    }
+    assert.ok(runs.length > 3, `cần nhiều lượt (${runs.length})`);
+    assert.ok(!runs.at(-1).partial);
+    const ref = await fullReference();
+    for (const prefix of ['v2_scopes/', 'v2_access/']) assert.deepEqual(stripTimes(store.dump(prefix)), stripTimes(ref.dump(prefix)), prefix);
+    // lượt kế tiếp sau khi hội tụ: không còn gì để ghi ngoài meta + trạng thái
+    store.clearLog(); now += 70_000;
+    await runSync({ store, fetchTable: src.fetchTable, env, trigger: 'cron', nowMs: () => now, log: silentLog });
+    assert.deepEqual(store.writtenPaths().filter(p => !/v2_meta|v2_config/.test(p)), []);
+  });
+  test('sau một lượt dở dang, người dùng bấm lại ngay không bị chặn “vừa đồng bộ”', async () => {
+    let now = T0;
+    const store = memoryStore({ clock: () => now });
+    const orig = store.commitBatch.bind(store);
+    store.commitBatch = async b => { now += 8_000; return orig(b); };
+    const src = makeSource({ tihN: 300, thcsN: 120 });
+    const env = { ...BASE_ENV, SYNC_BUDGET_MS: '5000' };
+    const r1 = await runSync({ store, fetchTable: src.fetchTable, env, trigger: 'user:a@x.vn', nowMs: () => now, log: silentLog });
+    assert.ok(r1.partial);
+    now += 1_000;
+    const r2 = await runSync({ store, fetchTable: src.fetchTable, env, trigger: 'user:a@x.vn', nowMs: () => now, log: silentLog });
+    assert.notEqual(r2.skipped, 'recent');
+  });
+  test('ngân sách mặc định chừa đủ thời gian trước giới hạn 60 s của Vercel và khóa 55 s', () => {
+    assert.ok(SYNC_BUDGET_MS <= 45_000);
+  });
+});

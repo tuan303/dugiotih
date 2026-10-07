@@ -780,6 +780,8 @@ const CFG = {
   SCHOOL_DOMAIN: 'hoangmaistarschool.edu.vn',
   MS_TENANT: 'af9ef20a-3158-43a0-a1ab-ad72a03eb4c5', // tenant Microsoft 365 của trường (thông tin công khai)
   SYNC_URL: '/api/sync',
+  SYNC_MAX_CONTINUE: 12,        // số lượt gọi tiếp tối đa khi máy chủ báo đồng bộ dở dang (partial)
+  SYNC_CONTINUE_DELAY_MS: 1500,
   SCHOOL_YEAR_START_MONTH: 8, // Năm học bắt đầu từ tháng 8
   AUTOSYNC_OPTIONS: [0, 5, 15, 30],
   DEFAULT_AUTOSYNC_MIN: 15,
@@ -1624,10 +1626,27 @@ function showState(ds, v) {
 }
 
 /* ======================= Đồng bộ (POST /api/sync) ======================= */
+// Một lượt đồng bộ lớn có thể kết thúc “dở dang” (partial: máy chủ đã lưu tiến độ trước giới hạn thời gian) →
+// gọi tiếp cho tới khi xong (tối đa SYNC_MAX_CONTINUE lượt); cộng dồn số phiếu mới/cập nhật/xóa để báo một lần.
 async function callSync() {
   if (S.syncing) return { ok: false, busy: true, error: 'Đang có một yêu cầu đồng bộ chạy.' };
   S.syncing = true;
   const rb = $('#refreshBtn'); rb.classList.add('spin'); rb.disabled = true; updateLive();
+  let total = null;
+  try {
+    for (let i = 0; i < CFG.SYNC_MAX_CONTINUE; i++) {
+      const r = await callSyncOnce();
+      total = !total ? r : { ...r, added: (+total.added || 0) + (+r.added || 0), updated: (+total.updated || 0) + (+r.updated || 0), removed: (+total.removed || 0) + (+r.removed || 0) };
+      if (!r.ok || !r.partial) break;
+      S.syncNote = `Đang đồng bộ phần tiếp theo${r.pending ? ` (còn ${nf0.format(r.pending)} mục)` : ''}…`; updateLive();
+      await new Promise(res => setTimeout(res, CFG.SYNC_CONTINUE_DELAY_MS));
+    }
+    return total;
+  } finally {
+    S.syncing = false; S.syncNote = ''; rb.classList.remove('spin'); rb.disabled = false; updateLive();
+  }
+}
+async function callSyncOnce() {
   try {
     const user = FB.auth?.currentUser;
     if (!user) return { ok: false, status: 401, error: 'Phiên đăng nhập đã kết thúc. Vui lòng đăng nhập lại.' };
@@ -1636,7 +1655,9 @@ async function callSync() {
     let body = null;
     try { body = await res.json(); } catch {}
     if (!body || typeof body !== 'object') {
-      body = { ok: false, error: res.status === 404 ? 'Không tìm thấy hàm /api/sync trên máy chủ (kiểm tra bản triển khai Vercel).' : `Máy chủ đồng bộ trả về lỗi HTTP ${res.status}.` };
+      body = { ok: false, error: res.status === 404 ? 'Không tìm thấy hàm /api/sync trên máy chủ (kiểm tra bản triển khai Vercel).'
+        : res.status === 504 ? 'Máy chủ xử lý quá thời gian cho phép. Vui lòng thử lại sau khoảng 1 phút.'
+        : `Máy chủ đồng bộ trả về lỗi HTTP ${res.status}.` };
     }
     body.status = res.status;
     if (!res.ok) body.ok = false;
@@ -1644,8 +1665,6 @@ async function callSync() {
   } catch (e) {
     console.warn('[đồng bộ]', e);
     return { ok: false, status: 0, error: navigator.onLine === false ? 'Thiết bị đang ngoại tuyến – không thể đồng bộ.' : 'Không kết nối được máy chủ đồng bộ (/api/sync).' };
-  } finally {
-    S.syncing = false; rb.classList.remove('spin'); rb.disabled = false; updateLive();
   }
 }
 const syncErrText = r => (r.status === 409 || r.skipped === 'locked')
@@ -1656,6 +1675,7 @@ function syncToast(r) {
   if (r.status === 409 || r.skipped === 'locked') { showToast(syncErrText(r)); return; }
   if (!r.ok) { showToast('Không đồng bộ được: ' + syncErrText(r)); return; }
   if (r.skipped === 'recent') { showToast('Dữ liệu vừa được đồng bộ chưa đầy 1 phút trước – đây đã là bản mới nhất.'); return; }
+  if (r.partial) { showToast('Đã đồng bộ một phần dữ liệu – hệ thống sẽ ghi tiếp phần còn lại ở lượt đồng bộ sau.'); return; }
   const a = +r.added || 0, u = +r.updated || 0, d = +r.removed || 0;
   const parts = [a && `${nf0.format(a)} phiếu mới`, u && `${nf0.format(u)} phiếu được cập nhật`, d && `${nf0.format(d)} phiếu bị xóa`].filter(Boolean);
   if (a && (S.vkind === 'level' || S.vkind === 'to')) showToast(`Đã đồng bộ: ${parts.join(' · ')}.`, 'Xem ngay', () => switchTab('log'));
@@ -1681,7 +1701,7 @@ function updateLive() {
   let title = ms ? `Đồng bộ từ Google Sheet lần cuối: ${fmtD(new Date(ms))} ${new Date(ms).toLocaleTimeString('vi-VN')}${m?.trigger ? ` (${triggerLabel(m.trigger)})` : ''}` : '';
   if (LOCAL) { st = S.syncing ? 'loading' : 'ok'; text = S.syncing ? 'Đang tải dev-data-v2.json…' : `Xem trước cục bộ${ms ? ' · dữ liệu ' + fmtWhen(ms) : ''}`; }
   else if (S.liveErr) { st = 'err'; text = S.ready ? 'Mất kết nối · đang hiện dữ liệu cũ' : 'Lỗi kết nối'; title = S.liveErr; }
-  else if (S.syncing) text = 'Đang đồng bộ…';
+  else if (S.syncing) text = S.syncNote || 'Đang đồng bộ…';
   else if (!V2.accKnown) text = 'Đang kết nối…';
   else if (anyCache()) {
     if (navigator.onLine === false || Date.now() - S.listenAt > CFG.OFFLINE_AFTER_MS) { st = 'off'; text = 'Ngoại tuyến – dữ liệu bộ nhớ đệm'; }

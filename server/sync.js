@@ -37,6 +37,10 @@ export const LOCK_TTL_MS = 55_000;
 export const RATE_LIMIT_MS = 60_000;
 export const WRITE_BATCH = 400;
 export const MAX_BATCH_OPS = 500;
+// Ghi song song tối đa ngần này lô; dừng nhận lô mới sau SYNC_BUDGET_MS (lưu tiến độ, lượt sau ghi tiếp) để luôn xong
+// trước giới hạn 60 s của Vercel và trước khi khóa (LOCK_TTL_MS) hết hạn.
+export const COMMIT_CONCURRENCY = 4;
+export const SYNC_BUDGET_MS = 40_000;
 export const DROP_GUARD_MIN = 20;      // chặn giảm bất thường: chỉ áp dụng khi lần trước có ít nhất ngần này phiếu
 export const DROP_GUARD_RATIO = 0.5;   // số phiếu mới < 50% lần trước → giữ dữ liệu cũ + cảnh báo
 // Firestore giới hạn mỗi yêu cầu ghi ~10 MiB (REST còn mã hóa lại chuỗi JSON của khối) → mỗi lô ≤ 6 MiB (ước lượng theo JSON).
@@ -122,6 +126,33 @@ async function commitGroups(store, groups) {
   let n = 0;
   for (const b of packGroups(groups)) { await store.commitBatch(b); n++; }
   return n;
+}
+/**
+ * Ghi các nhóm thao tác theo lô, song song tối đa `concurrency` lô; ngừng bắt đầu lô mới khi clock() ≥ deadline.
+ * @returns {{batches:number, done:Set<number>, timedOut:boolean}} done = chỉ số các nhóm đã ghi XONG toàn bộ.
+ */
+export async function commitGroupsUntil(store, groups, { clock = Date.now, deadline = Infinity, concurrency = COMMIT_CONCURRENCY, maxOps = WRITE_BATCH } = {}) {
+  const packed = packGroups(groups.map((g, gi) => g.map(op => Object.assign(Object.create(null), op, { __g: gi }))), maxOps);
+  const remaining = new Map();
+  for (const b of packed) for (const gi of new Set(b.map(o => o.__g))) remaining.set(gi, (remaining.get(gi) || 0) + 1);
+  const done = new Set(groups.map((g, gi) => gi).filter(gi => !remaining.has(gi))); // nhóm rỗng
+  let next = 0, batches = 0, timedOut = false;
+  const worker = async () => {
+    while (next < packed.length) {
+      if (clock() >= deadline) { timedOut = true; return; }
+      const b = packed[next++];
+      await store.commitBatch(b.map(({ __g, ...op }) => op));
+      batches++;
+      for (const gi of new Set(b.map(o => o.__g))) {
+        const left = remaining.get(gi) - 1;
+        remaining.set(gi, left);
+        if (!left) done.add(gi);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, packed.length)) }, worker));
+  if (next < packed.length) timedOut = true;
+  return { batches, done, timedOut };
 }
 
 // Chạy fn trên từng phần tử với tối đa `limit` lời gọi song song (giữ thứ tự kết quả).
@@ -332,7 +363,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
   }
 
   const newScopeHashes = {}, newChunkHashes = {};
-  const scopeGroups = [];
+  const scopeGroups = [], scopeGroupIds = [];
   let scopesWritten = 0, chunksWritten = 0, chunksDeleted = 0, scopesDeleted = 0;
   for (const s of scopes) {
     newScopeHashes[s.id] = s.doc.hash;
@@ -352,11 +383,12 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
       ops.push({ type: 'set', path: scopePath(s.id), data: { ...s.doc, syncedAtMs: nowMs } });
       scopesWritten++;
     }
-    if (ops.length) scopeGroups.push(ops);
+    if (ops.length) { scopeGroups.push(ops); scopeGroupIds.push(s.id); }
   }
 
   // Quyền: thu hẹp/thu hồi ghi TRƯỚC khi ghi dữ liệu; mở rộng ghi SAU khi các phạm vi mới đã tồn tại.
   const accessFirst = [], accessAfter = [], newAccessHashes = {};
+  const accessFirstIds = [], accessAfterIds = []; // { email, del } song song với từng nhóm
   let accessWritten = 0, accessDeleted = 0;
   for (const [email, a] of Object.entries(access)) {
     const h = hash53(JSON.stringify(a));
@@ -364,17 +396,19 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
     const prev = trust ? prevAccess[email] : null;
     if (prev?.h === h) continue;
     const op = { type: 'set', path: accessPath(email), data: { ...a, updatedAtMs: nowMs } };
-    (prev && a.scopes.every(x => (prev.s || []).includes(x)) ? accessFirst : accessAfter).push([op]);
+    if (prev && a.scopes.every(x => (prev.s || []).includes(x))) { accessFirst.push([op]); accessFirstIds.push({ email }); }
+    else { accessAfter.push([op]); accessAfterIds.push({ email }); }
     accessWritten++;
   }
   for (const email of prevAccessIds) {
-    if (!(email in access)) { accessFirst.push([{ type: 'delete', path: accessPath(email) }]); accessDeleted++; }
+    if (!(email in access)) { accessFirst.push([{ type: 'delete', path: accessPath(email) }]); accessFirstIds.push({ email, del: true }); accessDeleted++; }
   }
-  const staleScopeGroups = [];
+  const staleScopeGroups = [], staleScopeIds = [];
   for (const id of prevScopeIds) {
     if (id in newScopeHashes) continue;
     const cids = trust ? Object.keys(prevChunkHashes[id] || {}) : listedChunks.get(id) || [];
     staleScopeGroups.push([...cids.map(cid => ({ type: 'delete', path: chunkPath(id, cid) })), { type: 'delete', path: scopePath(id) }]);
+    staleScopeIds.push(id);
     chunksDeleted += cids.length;
     scopesDeleted++;
   }
@@ -382,11 +416,74 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
   // 6) Ghi: thu hẹp quyền → phạm vi → mở rộng quyền → xóa phạm vi thừa → meta (+ bản lưu) → trạng thái.
   //    Lỗi giữa chừng: trạng thái cũ được giữ nên lần sau ghi lại đúng phần còn thiếu (các thao tác đều idempotent).
   const tWrite = clock();
-  let batches = 0;
-  batches += await commitGroups(store, accessFirst);
-  batches += await commitGroups(store, scopeGroups);
-  batches += await commitGroups(store, accessAfter);
-  batches += await commitGroups(store, staleScopeGroups);
+  let batches = 0, partial = false;
+  const budgetMs = Number(env?.SYNC_BUDGET_MS) > 0 ? Number(env.SYNC_BUDGET_MS) : SYNC_BUDGET_MS;
+  const deadline = startMs + budgetMs;
+  const maxOps = Number(env?.SYNC_BATCH_OPS) > 0 ? Math.min(Number(env.SYNC_BATCH_OPS), WRITE_BATCH) : WRITE_BATCH; // nhỏ hơn chỉ để kiểm thử
+  const done = {};
+  for (const [name, groups] of [['accessFirst', accessFirst], ['scopes', scopeGroups], ['accessAfter', accessAfter], ['stale', staleScopeGroups]]) {
+    if (partial) { done[name] = new Set(); continue; }
+    const r = await commitGroupsUntil(store, groups, { clock, deadline, maxOps });
+    batches += r.batches;
+    done[name] = r.done;
+    if (r.timedOut) partial = true;
+  }
+
+  // Hết thời gian cho phép: lưu trạng thái chỉ gồm những gì ĐÃ ghi xong → lượt sau chỉ ghi phần còn lại (không ghi lại từ đầu).
+  if (partial) {
+    const pScope = trust ? { ...prevScopeHashes } : {};
+    const pChunk = trust ? { ...prevChunkHashes } : {};
+    const pAccess = trust ? { ...prevAccess } : {};
+    if (!trust) { // chưa có trạng thái: ghi nhận những gì đang có trên Firestore để lượt sau còn sửa/xóa được
+      for (const id of prevScopeIds) { pScope[id] = ''; pChunk[id] = Object.fromEntries((listedChunks.get(id) || []).map(c => [c, ''])); }
+      for (const email of prevAccessIds) pAccess[email] = { h: '', s: [] };
+    }
+    const pendingScopes = new Set(scopeGroupIds.filter((id, i) => !done.scopes.has(i)));
+    for (const sc of scopes) {
+      if (pendingScopes.has(sc.id)) continue;
+      pScope[sc.id] = newScopeHashes[sc.id];
+      pChunk[sc.id] = newChunkHashes[sc.id];
+    }
+    const applyAccess = (ids, set) => ids.forEach(({ email, del }, i) => {
+      if (!set.has(i)) return;
+      if (del) delete pAccess[email]; else pAccess[email] = newAccessHashes[email];
+    });
+    applyAccess(accessFirstIds, done.accessFirst);
+    applyAccess(accessAfterIds, done.accessAfter);
+    const pendingAccess = new Set([...accessFirstIds.filter((x, i) => !done.accessFirst.has(i)), ...accessAfterIds.filter((x, i) => !done.accessAfter.has(i))].map(x => x.email));
+    for (const [email, h] of Object.entries(newAccessHashes)) if (!pendingAccess.has(email)) pAccess[email] = h;
+    staleScopeIds.forEach((id, i) => { if (done.stale.has(i)) { delete pScope[id]; delete pChunk[id]; } });
+    const pendingCount = pendingScopes.size + pendingAccess.size + staleScopeIds.filter((id, i) => !done.stale.has(i)).length;
+    const finishedMs = clock();
+    warnings.push(`Lượt đồng bộ lớn: đã ghi một phần, còn ${pendingCount} mục – lượt kế tiếp sẽ ghi tiếp phần còn lại.`);
+    await store.commitBatch([...cacheOps, {
+      type: 'set', path: PATHS.state,
+      data: {
+        ...state,
+        version: SCHEMA_VERSION_V2,
+        scopeHashes: JSON.stringify(pScope),
+        chunkHashes: JSON.stringify(pChunk),
+        accessHashes: JSON.stringify(pAccess),
+        levels: levelState, staffHashes, rolesHash,
+        bench: JSON.stringify(benchState),
+        partial: true,
+        lastRunMs: finishedMs,
+        lastTrigger: trigger,
+        lastResult: { partial: true, pending: pendingCount, warnings: warnings.length },
+      },
+    }]);
+    const count = levelMeta.reduce((n, l) => n + l.count, 0);
+    const sum = k => Object.values(changes).reduce((n, c) => n + (c[k] || 0), 0);
+    return {
+      ok: true, partial: true, pending: pendingCount, count,
+      added: sum('added'), updated: sum('updated'), removed: sum('removed'),
+      scopes: scopes.length, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted,
+      accessCount: Object.keys(access).length, accessWritten, accessDeleted,
+      durationMs: finishedMs - startMs, syncedAtMs: null, trigger, warnings,
+      debug: { fetchMs, parseMs, writeMs: finishedMs - tWrite, batches, stats },
+      _internal: { access, people, scopes, levels },
+    };
+  }
   const durationMs = clock() - startMs;
   const syncedAtMs = clock();
   const count = levelMeta.reduce((s, l) => s + l.count, 0);
@@ -414,6 +511,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
       staffHashes,
       rolesHash,
       bench: JSON.stringify(benchState),
+      partial: false,
       lastRunMs: finishedMs,
       lastTrigger: trigger,
       lastResult: { count, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted, accessWritten, accessDeleted, durationMs: result.durationMs, warnings: warnings.length },
@@ -475,7 +573,7 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
     const [st, lk] = await Promise.all([store.get(PATHS.state), store.get(PATHS.lock)]);
     const lastOk = Number(st?.lastRunMs) || 0;
     const lastTry = Number(lk?.acquiredAt) || 0;
-    if (lastOk && startMs - lastOk < RATE_LIMIT_MS) {
+    if (lastOk && startMs - lastOk < RATE_LIMIT_MS && !st?.partial) {
       return {
         ok: true, skipped: 'recent', ...empty, count: st?.lastResult?.count ?? null,
         durationMs: clock() - startMs, syncedAtMs: lastOk, trigger,
@@ -502,7 +600,7 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
     for (;;) {
       const r = await syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log });
       total = mergeResults(total, r);
-      const canRerun = total.runs <= MAX_RERUNS && clock() - startMs < RERUN_BUDGET_MS;
+      const canRerun = !r.partial && total.runs <= MAX_RERUNS && clock() - startMs < RERUN_BUDGET_MS;
       const again = await store.releaseLock(token, { nowMs: clock(), ttlMs: LOCK_TTL_MS, rerun: canRerun });
       if (!again) { released = true; break; }
     }
