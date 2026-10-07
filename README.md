@@ -321,6 +321,15 @@ chia sẻ quyền **Người xem** cho đúng một tài khoản: **`client_emai
 Cách tìm địa chỉ này: Google Cloud console (project `dugiotih`) → **IAM & Admin → Service Accounts** → cột *Email*;
 hoặc mở tệp JSON khóa → giá trị `"client_email"`. **Chỉ chia sẻ địa chỉ email, không gửi tệp JSON khóa** cho ai.
 
+> [!IMPORTANT]
+> **Bật Google Sheets API (bắt buộc, làm một lần):** mở
+> https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=dugiotih → **Enable** (Bật).
+> Máy chủ đọc Sheet bằng **Google Sheets API** nên luôn lấy **đủ mọi dòng**, kể cả khi ai đó đang bật **bộ lọc** trên
+> Sheet. Nếu API chưa bật, máy chủ tạm đọc qua gviz – cách này **chỉ thấy các dòng đang hiển thị** (Sheet đang lọc
+> 28/647 dòng thì chỉ đồng bộ được 28) – và mỗi lượt đồng bộ sẽ kèm cảnh báo nhắc bật API. Ngoài ra, nếu số phiếu của
+> một cấp đột ngột giảm quá nửa so với lần trước, máy chủ **giữ nguyên dữ liệu cũ** và cảnh báo (thường do Sheet đang
+> lọc hoặc bị xóa nhầm); muốn chấp nhận con số mới thì đồng bộ bằng `CRON_SECRET` kèm `?force=1`.
+
 Với **từng** Sheet, làm theo đúng thứ tự (chia sẻ trước rồi mới khóa, để bản v1 đang đọc Sheet Tiểu học không bị
 gián đoạn):
 
@@ -597,6 +606,8 @@ Khi BGH đã duyệt bản Preview:
 | Cảnh báo “Email … được ghi cho 2 người khác nhau” | Cột Email của “DS Nhân sự” chép nhầm email của người khác | Sửa email của dòng sai; người đó có quyền ở lượt đồng bộ kế tiếp |
 | Cảnh báo “… ghi Cấp “THPT” – không tự cấp vai trò lãnh đạo” | Dòng BGH/tổ trưởng trong DS Nhân sự của cấp này ghi cấp khác | Sửa cột Cấp, hoặc thêm dòng vai trò trong trang “Phân quyền” |
 | Số liệu đối sánh (TB tổ/cấp) trong “Của tôi” chưa đổi dù có phiếu mới | Đúng thiết kế: chỉ tính các tuần đã kết thúc và chỉ công bố lại khi có ≥ 5 phiếu mới của ≥ 3 GV | Chờ sang tuần sau |
+| Số phiếu ít hơn trên Sheet; bỏ bộ lọc trên Sheet thì số phiếu tăng | Google Sheets API chưa bật → máy chủ đọc qua gviz, chỉ thấy các dòng đang hiển thị | Bật Google Sheets API cho project `dugiotih` ([mục Chia sẻ Google Sheet](#chia-sẻ-google-sheet-cho-máy-chủ)), rồi đồng bộ lại |
+| Cảnh báo “số phiếu giảm bất thường từ … xuống …” | Sheet đang bật bộ lọc (khi API chưa bật) hoặc nhiều dòng bị xóa | Bật Google Sheets API / bỏ lọc rồi đồng bộ lại; nếu thật sự đã xóa, đồng bộ bằng `CRON_SECRET` kèm `?force=1` |
 | Một cấp ghi “giữ dữ liệu cũ” (`stale`) trong cảnh báo | Lượt này không đọc được phiếu của cấp đó, hoặc Sheet bỗng trả 0 phiếu | Xem nội dung cảnh báo; sửa quyền chia sẻ / tên tab; nếu Sheet thật sự đã được làm trống, chạy `?force=1` |
 | Bấm “Đồng bộ ngay” bị 403 “chưa được cấp quyền xem dashboard nên không thể yêu cầu đồng bộ” | Email không thuộc `ALLOWED_DOMAINS` (vd. đặt `none`), không có trong `ADMIN_EMAILS` và chưa có quyền xem | Thêm email vào `ADMIN_EMAILS` hoặc chờ lượt đồng bộ của Apps Script |
 | `permission-denied` trên bản v2 | Chưa dán Security Rules v2 | Dán khối [Security Rules v2](#security-rules-v2-bản-dán-vào-firebase-console) → *Publish* |

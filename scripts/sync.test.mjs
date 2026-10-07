@@ -849,6 +849,8 @@ describe('sheet.js – gviz', () => {
   const wrap = obj => `/*O_o*/\ngoogle.visualization.Query.setResponse(${JSON.stringify(obj)});`;
   const okBody = wrap({ version: '0.6', status: 'ok', table: { cols: [{ id: 'A', label: 'x', type: 'string' }], rows: [{ c: [{ v: 'a);b' }] }] } });
   const resp = (body, status = 200, type = 'application/javascript; charset=utf-8') => new Response(body, { status, headers: { 'content-type': type } });
+  const isApi = url => String(url).startsWith('https://sheets.googleapis.com/');
+  const apiDisabled = () => new Response(JSON.stringify({ error: { code: 403, status: 'PERMISSION_DENIED', message: 'Google Sheets API has not been used in project 1 before or it is disabled.', details: [{ reason: 'SERVICE_DISABLED' }] } }), { status: 403, headers: { 'content-type': 'application/json' } });
 
   test('đọc tab theo TÊN (sheet=…) hoặc gid', async () => {
     assert.match(gvizUrl('SID', { sheet: 'DS Nhân sự' }), /\/d\/SID\/gviz\/tq\?sheet=DS%20Nh%C3%A2n%20s%E1%BB%B1&headers=1&tqx=out:json$/);
@@ -873,9 +875,11 @@ describe('sheet.js – gviz', () => {
   test('service account: Bearer token; lỗi token → đọc công khai và ghi nhớ', async () => {
     const sa = { client_email: 'sa@dugiotih.iam.gserviceaccount.com', private_key: 'k' };
     const auths = [];
-    const fetchImpl = async (url, init) => { auths.push(init.headers.Authorization); return resp(okBody); };
-    await makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, fetchImpl, getToken: async () => 'tok123' })({ sheet: 'A' });
-    assert.deepEqual(auths, ['Bearer tok123']);
+    const fetchImpl = async (url, init) => { if (isApi(url)) return apiDisabled(); auths.push(init.headers.Authorization); return resp(okBody); };
+    const f1 = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, fetchImpl, getToken: async () => 'tok123' });
+    await f1({ sheet: 'A' });
+    assert.deepEqual(auths, ['Bearer tok123'], 'Sheets API chưa bật → gviz bằng token');
+    assert.ok([...f1.warnings].some(w => /Sheets API chưa được bật/.test(w) && /BỘ LỌC/.test(w)));
     auths.length = 0;
     const f2 = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, fetchImpl, getToken: async () => { throw new Error('no token'); } });
     await f2({ sheet: 'A' });
@@ -886,7 +890,9 @@ describe('sheet.js – gviz', () => {
     const sa = { client_email: 'sa@x.iam.gserviceaccount.com', private_key: 'k' };
     let tokens = 0;
     const seen = [];
+    let apiCalls = 0;
     const fetchImpl = async (url, init) => {
+      if (isApi(url)) { apiCalls++; return apiDisabled(); }
       seen.push([url.match(/\/d\/([^/]+)\//)[1], init.headers.Authorization || '-']);
       if (url.includes('/d/PRIV/') && !init.headers.Authorization) return resp('<html>login</html>', 200, 'text/html');
       if (url.includes('/d/PUB/') && init.headers.Authorization) return resp('<html>login</html>', 200, 'text/html'); // Sheet chưa chia sẻ cho SA nhưng công khai
@@ -898,6 +904,7 @@ describe('sheet.js – gviz', () => {
     await f('PRIV', { sheet: 'B' });
     await f('PUB', { sheet: 'B' });
     assert.equal(tokens, 1, 'token lấy một lần');
+    assert.equal(apiCalls, 2, 'Sheets API chưa bật là thiết lập chung của dự án → chỉ thử MỘT lần (2 yêu cầu song song: giá trị gốc + hiển thị) cho mọi Sheet');
     assert.deepEqual(seen.filter(([s]) => s === 'PUB').map(x => x[1]), ['Bearer tok', '-', '-'], 'Sheet PUB chuyển sang đọc công khai và ghi nhớ');
     assert.equal(await f.isPublic('PRIV', { sheet: 'A' }), false);
     assert.equal(await f.isPublic('PUB', { sheet: 'A' }), true);

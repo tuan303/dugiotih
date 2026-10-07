@@ -37,6 +37,8 @@ export const LOCK_TTL_MS = 55_000;
 export const RATE_LIMIT_MS = 60_000;
 export const WRITE_BATCH = 400;
 export const MAX_BATCH_OPS = 500;
+export const DROP_GUARD_MIN = 20;      // chặn giảm bất thường: chỉ áp dụng khi lần trước có ít nhất ngần này phiếu
+export const DROP_GUARD_RATIO = 0.5;   // số phiếu mới < 50% lần trước → giữ dữ liệu cũ + cảnh báo
 // Firestore giới hạn mỗi yêu cầu ghi ~10 MiB (REST còn mã hóa lại chuỗi JSON của khối) → mỗi lô ≤ 6 MiB (ước lượng theo JSON).
 export const MAX_BATCH_BYTES = 6 * 1024 * 1024;
 export { CHUNK_OPTS };
@@ -192,6 +194,8 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
     cfg.rolesSheetId ? settle(() => fetchTable(cfg.rolesSheetId, { sheet: cfg.rolesTab })) : Promise.resolve(null),
   ]);
   const fetchMs = clock() - startMs;
+  // Cảnh báo về cách đọc Sheet (vd. Google Sheets API chưa bật → đọc qua gviz, có thể thiếu dòng khi Sheet đang lọc).
+  if (fetchTable.warnings) for (const w of fetchTable.warnings) warnings.push(w);
 
   const state = (await store.get(PATHS.state)) || {};
   const prevLevels = state.levels && typeof state.levels === 'object' ? state.levels : {};
@@ -219,6 +223,11 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
     const prevCount = Number(prevLevels[cap]?.count) || 0;
     if (!formErr && !records.length && prevCount > 0 && !force) {
       formErr = `Sheet trả về 0 phiếu trong khi lần trước có ${prevCount} phiếu`;
+    }
+    // Số phiếu giảm quá nửa: thường do Sheet đang bật BỘ LỌC (khi đọc qua gviz) hoặc dữ liệu bị xóa nhầm → giữ dữ liệu cũ.
+    // Muốn chấp nhận con số mới (đã chủ động xóa nhiều dòng): gọi đồng bộ có ?force=1 bằng CRON_SECRET.
+    if (!formErr && records.length && prevCount >= DROP_GUARD_MIN && records.length < prevCount * DROP_GUARD_RATIO && !force) {
+      formErr = `số phiếu giảm bất thường từ ${prevCount} xuống ${records.length} – có thể Sheet đang bật bộ lọc hoặc bị xóa nhầm dữ liệu`;
     }
     if (formErr) {
       formFailures++;
