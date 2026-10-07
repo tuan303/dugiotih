@@ -1,5 +1,5 @@
 # Thư viện cài bằng npm
-node_modules/
+node_modules
 
 # Biến môi trường / bí mật (chỉ commit .env.example)
 .env
