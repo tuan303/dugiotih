@@ -239,6 +239,19 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
   for (const L of cfg.levels) {
     const { cap, label, color } = L;
     if (!L.enabled) {
+      // Cấp đã có dữ liệu nhưng môi trường này thiếu SHEET_ID_<CẤP> (vd. quên tích Production khi go-live) → giữ dữ liệu cũ,
+      // không xóa phạm vi của cấp. Muốn gỡ hẳn một cấp: đồng bộ bằng CRON_SECRET kèm ?force=1.
+      const prev = (Number(prevLevels[cap]?.count) || 0) > 0 && !force ? await loadPrevLevel(store, cap) : null;
+      if (prev) {
+        const cached = await store.get(staffCachePath(cap));
+        const prevDoc = await store.get(scopePath(scopeIdLevel(cap)));
+        const keptAt = Number(prevLevels[cap]?.syncedAtMs) || null;
+        levels[cap] = { cap, enabled: true, records: prev.records, crit: prev.crit, staffRows: parseJSON(cached?.rows, []), sheetUrl: prevDoc?.sheetUrl || '', stale: true };
+        levelMeta.push({ cap, label, color, enabled: true, count: prev.records.length, syncedAtMs: keptAt, stale: true });
+        levelState[cap] = { count: prev.records.length, syncedAtMs: keptAt };
+        warnings.push(`${label}: môi trường này chưa đặt biến SHEET_ID_${cap.toUpperCase()} – giữ nguyên dữ liệu đã đồng bộ trước đó. Đặt biến (tích đúng môi trường) rồi Redeploy để cập nhật.`);
+        continue;
+      }
       levels[cap] = { cap, enabled: false, records: [], crit: [], staffRows: [] };
       levelMeta.push({ cap, label, color, enabled: false, count: 0, syncedAtMs: null, stale: false });
       continue;

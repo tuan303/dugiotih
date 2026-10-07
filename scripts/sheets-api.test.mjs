@@ -293,3 +293,23 @@ describe('runSync – lượt đồng bộ vượt ngân sách thời gian', () 
     assert.ok(SYNC_BUDGET_MS <= 45_000);
   });
 });
+
+describe('runSync – thiếu SHEET_ID của một cấp đã có dữ liệu (vd. quên tích môi trường Production)', () => {
+  test('giữ nguyên dữ liệu và phạm vi của cấp đó + cảnh báo; force mới gỡ', async () => {
+    let now = T0;
+    const store = memoryStore({ clock: () => now });
+    const src = makeSource({ tihN: 40, thcsN: 25 });
+    const run = (env, force = false) => { now += 120_000; return runSync({ store, fetchTable: src.fetchTable, env, trigger: 'cron', nowMs: () => now, force, log: silentLog }); };
+    await run(BASE_ENV);
+    const before = JSON.stringify(store.dump('v2_scopes/L_thcs'));
+    const r = await run({ SHEET_ID_TIH: BASE_ENV.SHEET_ID_TIH });
+    assert.ok(r.ok);
+    assert.ok(r.warnings.some(w => /SHEET_ID_THCS/.test(w) && /giữ nguyên/.test(w)));
+    const L = (await store.get(PATHS.meta)).levels.find(l => l.cap === 'thcs');
+    assert.equal(L.enabled, true); assert.equal(L.stale, true); assert.equal(L.count, 25);
+    assert.ok(await store.get('v2_scopes/L_thcs'), 'phạm vi THCS vẫn còn');
+    assert.equal(JSON.stringify(store.dump('v2_scopes/L_thcs/chunks')), JSON.stringify(JSON.parse(before) && store.dump('v2_scopes/L_thcs/chunks')));
+    await run({ SHEET_ID_TIH: BASE_ENV.SHEET_ID_TIH }, true);
+    assert.equal(await store.get('v2_scopes/L_thcs'), null, 'force: gỡ hẳn cấp không còn cấu hình');
+  });
+});
