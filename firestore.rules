@@ -2,8 +2,15 @@ rules_version = '2';
 
 // Quy tắc bảo mật Firestore – Dashboard dự giờ, Trường Tiểu học, THCS & THPT Ngôi Sao Hoàng Mai.
 //
+// Tệp này chứa quy tắc của CẢ HAI phiên bản, dùng chung một cơ sở dữ liệu:
+//   • v1 (Tiểu học, nhánh main đang chạy): dashboard/*, dashboard_chunks/*, phieu/*, config/*
+//   • v2 (Dashboard toàn trường – 3 cấp, phân quyền theo vai trò): v2_meta/*, v2_access/*, v2_scopes/**, v2_config/*
+// Hai phiên bản không đọc/ghi dữ liệu của nhau → dán tệp này lên Firebase sớm cũng không ảnh hưởng bản v1 đang chạy.
+// Khi đã chuyển hẳn sang v2 và xóa dữ liệu v1, có thể bỏ phần v1 (xem README, mục “Chuyển sang v2”).
+//
 // ĐĂNG NHẬP: CHỈ bằng tài khoản Microsoft 365 của trường (Firebase Auth, nhà cung cấp 'microsoft.com').
 //
+// ───────────── v1 ─────────────
 // • Client CHỈ ĐƯỢC ĐỌC dashboard/*, dashboard_chunks/*, phieu/* khi:
 //     – đã đăng nhập bằng Microsoft (request.auth.token.firebase.sign_in_provider == 'microsoft.com'),
 //     – token có email (khác rỗng), và
@@ -24,6 +31,23 @@ rules_version = '2';
 //   (Admin SDK không chịu ràng buộc của rules).
 // • config/* (danh sách quyền, trạng thái đồng bộ, khóa đồng bộ) không client nào đọc được.
 // • Mọi đường dẫn khác: từ chối.
+//
+// ───────────── v2 – Dashboard toàn trường ─────────────
+// Mỗi người dùng có MỘT tài liệu v2_access/{email viết thường} do /api/sync ghi, liệt kê các “phạm vi” (scope) được xem:
+//   L_tih, L_thcs, L_thpt        – toàn bộ một cấp (BGH liên cấp: cả 3 cấp; BGH cấp: cấp của mình)
+//   T_<cấp>_<tổ>                 – một tổ chuyên môn (Tổ trưởng)
+//   P_<mã cá nhân>               – dữ liệu của riêng người đó (mọi giáo viên)
+// • v2_access/{email}: chỉ chính chủ đọc được (email trong token, viết thường, phải trùng mã tài liệu).
+// • v2_meta/global (tóm tắt các cấp, thời điểm đồng bộ): ai có tài liệu v2_access đều đọc được.
+// • v2_scopes/{scopeId} và v2_scopes/{scopeId}/chunks/{c}: chỉ đọc được khi scopeId nằm trong
+//   v2_access/{email của mình}.scopes. Không có tài liệu v2_access (chưa được cấp quyền / “Không truy cập”) → từ chối.
+// • v2_config/* (mã băm, số liệu đối sánh đã công bố, người kích hoạt lượt đồng bộ gần nhất, khóa đồng bộ, giới hạn tần
+//   suất, bản lưu “DS Nhân sự”/“Phân quyền” có email): không client nào đọc/ghi được.
+// • Cùng điều kiện đăng nhập như v1: nhà cung cấp 'microsoft.com', có email; email phải có đúng một '@' và không chứa
+//   '/' (để dùng an toàn làm mã tài liệu). Điều kiện App registration SINGLE-TENANT ở trên áp dụng y hệt.
+// • ⚠ Quyền v2 gắn với EMAIL trong token → BẮT BUỘC bật Firebase Authentication → Settings → User actions →
+//   “Email enumeration protection” (khi tắt, người đã đăng nhập tự đổi được email tài khoản của mình thành email của BGH
+//   qua API accounts:update mà không cần xác minh). Xem README, mục “Bảo mật đăng nhập Microsoft 365”.
 //
 // Triển khai: npx firebase-tools deploy --only firestore:rules,firestore:indexes
 // (hoặc dán nội dung tệp này vào Firebase console → Firestore Database → Rules → Publish).
@@ -84,6 +108,66 @@ service cloud.firestore {
 
     // config/access, config/syncState, config/syncLock – chỉ máy chủ (Admin SDK).
     match /config/{docId} {
+      allow read, write: if false;
+    }
+
+    // ===================== v2 – Dashboard toàn trường =====================
+
+    // Email của người đang đăng nhập, viết thường (= mã tài liệu v2_access của họ).
+    // Chỉ gọi sau isMicrosoftUserWithEmail() (khi đó token chắc chắn có email kiểu chuỗi).
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    // Đăng nhập Microsoft + email có ĐÚNG MỘT '@' và không có '/' (ký tự '/' sẽ làm sai đường dẫn tài liệu).
+    function isV2User() {
+      return isMicrosoftUserWithEmail() && myEmail().matches('[^/@]+@[^/@]+');
+    }
+
+    // Đường dẫn tài liệu quyền v2 của người đang đăng nhập.
+    function myAccessPath() {
+      return /databases/$(database)/documents/v2_access/$(myEmail());
+    }
+
+    // Đã được cấp quyền v2 (có tài liệu v2_access của chính mình).
+    function hasV2Access() {
+      return isV2User() && exists(myAccessPath());
+    }
+
+    // Được xem phạm vi scopeId: scopeId nằm trong danh sách scopes của tài liệu quyền.
+    // Thiếu trường / sai kiểu → coi như danh sách rỗng (từ chối).
+    function canReadScope(scopeId) {
+      return hasV2Access()
+        && get(myAccessPath()).data.get('scopes', []) is list
+        && scopeId in get(myAccessPath()).data.get('scopes', []);
+    }
+
+    // v2_access/{email} – vai trò + danh sách phạm vi của MỘT người. Chỉ chính chủ đọc (get), không ai liệt kê được.
+    match /v2_access/{email} {
+      allow get: if isV2User() && email == myEmail();
+      allow list, write: if false;
+    }
+
+    // v2_meta/global – danh sách cấp (tên, màu, đã kết nối dữ liệu chưa, số phiếu) và thời điểm đồng bộ.
+    match /v2_meta/{docId} {
+      allow get: if docId == 'global' && hasV2Access();
+      allow list, write: if false;
+    }
+
+    // v2_scopes/{scopeId} – thông tin một phạm vi (tiêu chí, danh sách khối dữ liệu, mốc so sánh ẩn danh…).
+    match /v2_scopes/{scopeId} {
+      allow get: if canReadScope(scopeId);
+      allow list, write: if false;
+
+      // v2_scopes/{scopeId}/chunks/{c000, c001, …} – phiếu dạng gọn của phạm vi đó (đọc từng khối hoặc cả bộ sưu tập con).
+      match /chunks/{chunkId} {
+        allow read: if canReadScope(scopeId);
+        allow write: if false;
+      }
+    }
+
+    // v2_config/state, v2_config/lock, v2_config/staff_<cấp>, v2_config/roles – chỉ máy chủ (Admin SDK).
+    match /v2_config/{docId} {
       allow read, write: if false;
     }
 

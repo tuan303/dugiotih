@@ -9,8 +9,9 @@
 !.env.example
 *.local
 
-# Dữ liệu thật (phiếu đánh giá, mã Google Sheet)
+# Dữ liệu thật (phiếu đánh giá, email, mã nhân sự, mã Google Sheet) – v1 và v2
 dev-data.json
+dev-data-v2.json
 dashboard-du-gio.html
 
 # Khóa service account / chứng chỉ

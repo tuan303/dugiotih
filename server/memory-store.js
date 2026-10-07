@@ -6,7 +6,7 @@
 //   listIds(collection)             → Promise<string[]>
 //   commitBatch(ops)                → ghi nguyên tử (≤ 500 thao tác)
 //   commitMany(ops, size = 400)     → ghi theo từng lô ≤ size (mỗi lô nguyên tử)
-//   acquireLock(nowMs, ttlMs)       → Promise<string|null>  mã khóa, hoặc null nếu đang bị khóa (khi đó ghi nhận “có yêu cầu chờ”)
+//   acquireLock(nowMs, ttlMs)       → Promise<string|null>  mã khóa (tài liệu lockPath), hoặc null nếu đang bị khóa (khi đó ghi nhận “có yêu cầu chờ”)
 //   releaseLock(token, {nowMs, ttlMs, rerun}) → Promise<boolean>  true = có yêu cầu chờ → khóa được gia hạn để chạy lại
 //   serverTimestamp()               → giá trị đặc biệt, thay bằng thời điểm ghi
 //   timestamp(date)                 → giá trị thời điểm của kho
@@ -15,8 +15,10 @@
 import { randomUUID } from 'node:crypto';
 
 export const MAX_BATCH_OPS = 500;
+// Firestore từ chối yêu cầu ghi lớn hơn 10 MiB (INVALID_ARGUMENT) – kho bộ nhớ mô phỏng theo kích thước JSON của lô.
+export const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
 const SERVER_TS = Object.freeze({ __memoryServerTimestamp: true });
-const LOCK_PATH = 'config/syncLock';
+export const DEFAULT_LOCK_PATH = 'v2_config/lock';
 
 const isDocPath = p => typeof p === 'string' && /^[^/]+\/[^/]+(\/[^/]+\/[^/]+)*$/.test(p);
 
@@ -39,15 +41,21 @@ function resolveSentinels(v, now, at = '') {
  * @param {object} [opts]
  * @param {() => number} [opts.clock]  thời điểm (ms) dùng cho serverTimestamp
  * @param {Record<string, object>} [opts.initial]  dữ liệu ban đầu { path: data }
+ * @param {string} [opts.lockPath]  tài liệu khóa đồng bộ (mặc định v2_config/lock)
  */
-export function memoryStore({ clock = Date.now, initial = {} } = {}) {
+export function memoryStore({ clock = Date.now, initial = {}, lockPath = DEFAULT_LOCK_PATH } = {}) {
+  const LOCK_PATH = lockPath;
   const docs = new Map();
   for (const [p, d] of Object.entries(initial)) docs.set(p, structuredClone(d));
   const log = []; // mỗi lần commit: { kind: 'batch'|'many', ops: [{type, path}] }
+  let maxCommitBytes = 0;
 
   function applyAtomic(ops, kind) {
     if (!Array.isArray(ops)) throw new TypeError('ops phải là mảng');
     if (ops.length > MAX_BATCH_OPS) throw new Error(`Lô ghi vượt quá ${MAX_BATCH_OPS} thao tác (${ops.length}).`);
+    const bytes = Buffer.byteLength(JSON.stringify(ops.map(o => [o.path, o.data ?? null])));
+    if (bytes > MAX_REQUEST_BYTES) throw new Error(`Lô ghi quá lớn: ${(bytes / 1048576).toFixed(2)} MiB > 10 MiB (Firestore sẽ báo INVALID_ARGUMENT).`);
+    maxCommitBytes = Math.max(maxCommitBytes, bytes);
     for (const op of ops) {
       if (!isDocPath(op.path)) throw new Error(`Đường dẫn tài liệu không hợp lệ: ${op.path}`);
       if (op.type !== 'set' && op.type !== 'delete') throw new Error(`Thao tác không hợp lệ: ${op.type}`);
@@ -105,6 +113,7 @@ export function memoryStore({ clock = Date.now, initial = {} } = {}) {
     // ---- tiện ích cho kiểm thử / dry-run ----
     docs,
     log,
+    get maxCommitBytes() { return maxCommitBytes; },
     clearLog() { log.length = 0; },
     writtenPaths() { return log.flatMap(c => c.ops.map(o => `${o.type}:${o.path}`)); },
     dump(prefix = '') {

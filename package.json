@@ -2,13 +2,14 @@
   "name": "dugiotih",
   "version": "1.0.0",
   "private": true,
-  "description": "Dashboard dự giờ của Trường Ngôi Sao Hoàng Mai – đồng bộ Google Sheet → Firestore (Vercel), đăng nhập Microsoft 365.",
+  "description": "Dashboard dự giờ toàn trường (Tiểu học, THCS, THPT) của Trường Ngôi Sao Hoàng Mai – đồng bộ Google Sheet → Firestore (Vercel), đăng nhập Microsoft 365, phân quyền BGH liên cấp / BGH cấp / tổ trưởng / giáo viên.",
   "type": "module",
   "engines": {
     "node": "22.x"
   },
   "scripts": {
     "test": "node --test \"scripts/*.test.mjs\"",
+    "test:vercel": "node --no-experimental-require-module --test \"scripts/*.test.mjs\"",
     "dry-run": "node scripts/dry-run.mjs"
   },
   "dependencies": {

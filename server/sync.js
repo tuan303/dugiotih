@@ -1,273 +1,413 @@
-// Lõi đồng bộ Google Sheet → Firestore. Chạy được với Firestore thật (firestoreStore) và kho bộ nhớ (memory-store.js).
+// Lõi đồng bộ v2 (Dashboard toàn trường): Google Sheet của từng cấp (+ Sheet phân quyền) → Firestore.
+// Chạy được với Firestore thật (firestoreStore) và kho bộ nhớ (memory-store.js).
 //
-// Bố cục Firestore:
-//   dashboard/meta, dashboard/staff, dashboard_chunks/{cNNN}, phieu/{id}   – client đọc (qua security rules)
-//   config/access, config/syncState, config/syncLock                       – chỉ máy chủ
+// CHỈ ghi các collection v2 (v1 – dashboard/*, dashboard_chunks/*, phieu/*, config/* – giữ nguyên để bản v1 đang chạy không bị ảnh hưởng):
+//   v2_meta/global                         { version: 2, syncedAtMs, levels:[{cap,label,color,enabled,count,syncedAtMs,stale}], trigger, durationMs }
+//   v2_access/{email}                      { email, name, roles:{bghAll,bghCaps,toTruong,person}, scopes:[scopeId], updatedAtMs }
+//   v2_scopes/{scopeId}                    { kind, …, count, chunkIds, crit, staff?, bgh?, benchmarks?, syncedAtMs, hash }
+//   v2_scopes/{scopeId}/chunks/{cNNN}      { i, n, data (JSON bản ghi gọn), hash }
+//   v2_config/state, v2_config/lock, v2_config/staff_<cap>, v2_config/roles   – chỉ máy chủ
+//     (state còn giữ số liệu đối sánh đã công bố – state.bench – để chỉ công bố lại khi đủ phiếu mới, xem scopes.js)
+// Client đọc v2_access/<email> của mình rồi các v2_scopes được liệt kê trong đó (firestore.rules kiểm soát).
+// v2_meta/global.trigger KHÔNG chứa email người bấm đồng bộ ('user'); email chỉ lưu ở v2_config/state.lastTrigger.
 import { randomUUID } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import {
-  SCHEMA_VERSION, hash53, levelOf, levelName, tsToInstant, gradeOf,
-  parseFormTable, parseStaffTable, chunkRecords,
-} from '../lib/shared.js';
-import { splitEmails, uniqSorted, envEmails, envDomains, accessFromSheetMode } from './auth.js';
+import { SCHEMA_VERSION_V2, CAPS, CAP_INFO, hash53, parseFormTable, parseStaffTable } from '../lib/shared.js';
+import { envDomains } from './auth.js';
+import { resolveAccess, parseRolesTable, adminEmails, DEFAULT_ROLES_TAB } from './roles.js';
+import { buildScopes, scopeIdLevel, CHUNK_OPTS, benchCutoff, benchGroups, publishBenchmarks } from './scopes.js';
 
 export const PATHS = Object.freeze({
-  meta: 'dashboard/meta',
-  staff: 'dashboard/staff',
-  chunks: 'dashboard_chunks',
-  phieu: 'phieu',
-  access: 'config/access',
-  state: 'config/syncState',
-  lock: 'config/syncLock',
+  meta: 'v2_meta/global',
+  access: 'v2_access',
+  scopes: 'v2_scopes',
+  state: 'v2_config/state',
+  lock: 'v2_config/lock',
+  roles: 'v2_config/roles',
 });
-export const DEFAULT_FORM_GID = '948197065';
-export const DEFAULT_STAFF_GID = '979319376';
+export const staffCachePath = cap => `v2_config/staff_${cap}`;
+export const scopePath = id => `${PATHS.scopes}/${id}`;
+export const chunksCol = id => `${PATHS.scopes}/${id}/chunks`;
+export const chunkPath = (id, cid) => `${chunksCol(id)}/${cid}`;
+export const accessPath = email => `${PATHS.access}/${email}`;
+
+export const DEFAULT_FORM_TAB = 'Câu trả lời biểu mẫu 1';
+export const DEFAULT_STAFF_TAB = 'DS Nhân sự';
 export const LOCK_TTL_MS = 55_000;
 export const RATE_LIMIT_MS = 60_000;
-export const PHIEU_BATCH = 400;
+export const WRITE_BATCH = 400;
 export const MAX_BATCH_OPS = 500;
-// chunkRecords đo độ dài theo đơn vị UTF-16; mỗi đơn vị ≤ 3 byte UTF-8 → 340 000 × 3 < 1 MiB (giới hạn tài liệu Firestore).
-export const CHUNK_OPTS = Object.freeze({ maxBytes: 340_000, maxRecords: 500 });
+// Firestore giới hạn mỗi yêu cầu ghi ~10 MiB (REST còn mã hóa lại chuỗi JSON của khối) → mỗi lô ≤ 6 MiB (ước lượng theo JSON).
+export const MAX_BATCH_BYTES = 6 * 1024 * 1024;
+export { CHUNK_OPTS };
 const RERUN_BUDGET_MS = 25_000; // chỉ chạy lại (do có yêu cầu chờ) khi tổng thời gian còn dưới mức này
 const MAX_RERUNS = 2;
 
 const publicError = (message, code = 'SYNC_ERROR') => Object.assign(new Error(message), { expose: true, code });
+// Thông điệp lỗi đưa vào cảnh báo: chỉ lỗi do ta tạo (expose) mới giữ nguyên nội dung (lỗi lạ có thể chứa chi tiết nội bộ).
+const errMsg = e => (e?.expose ? String(e.message) : 'lỗi không xác định – xem log của hàm /api/sync');
+const parseJSON = (s, fallback) => {
+  if (typeof s !== 'string' || !s) return fallback;
+  try { const o = JSON.parse(s); return o && typeof o === 'object' ? o : fallback; } catch { return fallback; }
+};
 
 /* ---------------- Cấu hình từ biến môi trường ---------------- */
-// accessFromSheet: 'bgh' | 'all' | '0' (xem accessFromSheetMode trong auth.js)
-// envDomains: mặc định ['hoangmaistarschool.edu.vn'] khi ALLOWED_DOMAINS chưa đặt; 'none' → []
+const isOff = v => /^(none|off|false|-|0|khong|không)$/i.test(String(v ?? '').trim());
+const tabOf = (v, def) => (v == null || !String(v).trim() ? def : isOff(v) ? '' : String(v).trim());
+
+/**
+ * SHEET_ID_TIH / SHEET_ID_THCS / SHEET_ID_THPT (trống → cấp đó “Chưa kết nối dữ liệu”; SHEET_ID_TIH trống → dùng SHEET_ID của v1),
+ * SHEET_FORM_TAB_<CẤP> (mặc định “Câu trả lời biểu mẫu 1”), SHEET_STAFF_TAB_<CẤP> (mặc định “DS Nhân sự”; none/off = không đọc),
+ * ROLES_SHEET_ID + ROLES_TAB (mặc định “Phân quyền”), ADMIN_EMAILS, ALLOWED_DOMAINS.
+ */
 export function readSyncConfig(env = {}) {
-  const sheetId = String(env.SHEET_ID ?? '').trim();
-  const formGid = String(env.SHEET_GID_FORM ?? '').trim() || DEFAULT_FORM_GID;
-  const rawStaff = env.SHEET_GID_STAFF;
-  const staffGid = rawStaff == null ? DEFAULT_STAFF_GID
-    : (/^(|none|off|false|-)$/i.test(String(rawStaff).trim()) ? '' : String(rawStaff).trim());
+  const levels = CAPS.map(cap => {
+    const U = cap.toUpperCase();
+    let sheetId = String(env[`SHEET_ID_${U}`] ?? '').trim();
+    if (!sheetId && cap === 'tih') sheetId = String(env.SHEET_ID ?? '').trim();
+    return {
+      cap, label: CAP_INFO[cap].label, color: CAP_INFO[cap].color,
+      sheetId, enabled: !!sheetId,
+      formTab: tabOf(env[`SHEET_FORM_TAB_${U}`], DEFAULT_FORM_TAB) || DEFAULT_FORM_TAB,
+      staffTab: tabOf(env[`SHEET_STAFF_TAB_${U}`], DEFAULT_STAFF_TAB),
+    };
+  });
   return {
-    sheetId, formGid, staffGid,
-    accessFromSheet: accessFromSheetMode(env),
-    envEmails: envEmails(env),
+    levels,
+    rolesSheetId: String(env.ROLES_SHEET_ID ?? '').trim(),
+    rolesTab: String(env.ROLES_TAB ?? '').trim() || DEFAULT_ROLES_TAB,
+    adminEmails: adminEmails(env),
     envDomains: envDomains(env),
   };
 }
-export const sheetUrlOf = (sheetId, gid) => (sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}/edit#gid=${gid}` : '');
+export const sheetUrlOf = sheetId => (sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}/edit` : '');
 
-/* ---------------- Ánh xạ bản ghi gọn → tài liệu phieu/{id} ---------------- */
-// gradeOf dùng chung với dashboard (lib/shared.js) để phieu/{id}.khoi và bộ lọc “Khối” luôn khớp nhau.
-export { gradeOf };
-// Phần dữ liệu ổn định (không gồm thời điểm ghi) – dùng để tính hash phát hiện thay đổi
-function phieuCore(r, crit) {
-  const sc = r.sc || [];
-  const valid = sc.filter(v => v != null);
-  const total = valid.reduce((a, b) => a + b, 0);
-  const avg = valid.length ? total / valid.length : 0;
-  const diem = {};
-  crit.forEach((k, j) => { diem[k.code] = sc[j] ?? null; });
-  return {
-    ngayGui: r.ts, ngayDay: r.day,
-    toNguoiDu: r.og, nguoiDu: r.on, toGiaoVien: r.tg, giaoVien: r.tn,
-    tenBai: r.lesson || '', tiet: r.period || '', mon: r.subject || '', lop: r.cls || '', khoi: gradeOf(r.cls),
-    diem, tongDiem: total, diemToiDa: valid.length * 5, diemTB: Math.round(avg * 100) / 100,
-    xepLoai: levelName(levelOf(avg)),
-    uuDiem: r.pros || '', canKhacPhuc: r.cons || '',
-  };
-}
-export function phieuDoc(r, crit, store) {
-  return { thoiGianGui: store.timestamp(tsToInstant(r.ts)), ...phieuCore(r, crit), capNhatLuc: store.serverTimestamp() };
-}
-export const phieuHash = (r, crit) => hash53(`v${SCHEMA_VERSION}|${JSON.stringify(phieuCore(r, crit))}`);
-
-/* ---------------- Danh sách quyền truy cập ---------------- */
-// staff: kết quả parseStaffTable ({ bgh:[{email}], allEmails:[] }). Email viết thường, lọc trùng, sắp xếp.
-export function sheetAccessEmails(mode, staff) {
-  if (mode === 'all') {
-    const all = Array.isArray(staff?.allEmails) ? staff.allEmails
-      : [...(staff?.bgh || []), ...(staff?.teach || [])].map(s => s.email);
-    return all.flatMap(e => splitEmails(e));
+/* ---------------- Ghi theo lô ---------------- */
+// Kích thước ước lượng của một thao tác ghi (byte JSON – gần với yêu cầu REST; gRPC còn nhỏ hơn).
+export const opBytes = op => Buffer.byteLength(String(op.path)) + (op.data ? Buffer.byteLength(JSON.stringify(op.data)) : 0) + 64;
+// groups: mảng các nhóm thao tác nên nằm CÙNG một lô (vd. tài liệu phạm vi + các khối của nó). Gom nhóm thành lô ≤ max thao tác
+// và ≤ maxBytes. Nhóm quá lớn (nhiều khối lớn – vd. ghi lại toàn bộ khi dữ liệu đã nhiều) được tách: các khối (set …/chunks/…)
+// ghi ở các lô TRƯỚC, phần đuôi (xóa khối thừa + tài liệu phạm vi) ở lô CUỐI – tài liệu phạm vi chỉ trỏ tới khối đã tồn tại.
+export function packGroups(groups, max = WRITE_BATCH, maxBytes = MAX_BATCH_BYTES) {
+  const batches = [];
+  let cur = [], curB = 0;
+  const flush = () => { if (cur.length) { batches.push(cur); cur = []; curB = 0; } };
+  for (const g of groups) {
+    if (!g.length) continue;
+    const sizes = g.map(opBytes);
+    const gB = sizes.reduce((a, b) => a + b, 0);
+    if (g.length > max || gB > maxBytes) {
+      flush();
+      let cut = g.findIndex(op => op.type === 'delete');
+      if (cut < 0) cut = g.length - 1;
+      let b = [], bB = 0;
+      for (let i = 0; i < cut; i++) {
+        if (b.length && (b.length >= max || bB + sizes[i] > maxBytes)) { batches.push(b); b = []; bB = 0; }
+        b.push(g[i]); bB += sizes[i];
+      }
+      if (b.length) batches.push(b);
+      const tail = g.slice(cut);
+      for (let i = 0; i < tail.length; i += max) batches.push(tail.slice(i, i + max));
+      continue;
+    }
+    if (cur.length + g.length > max || curB + gB > maxBytes) flush();
+    cur.push(...g); curB += gB;
   }
-  if (mode === 'bgh') return (staff?.bgh || []).flatMap(b => splitEmails(b.email));
-  return [];
+  flush();
+  return batches;
 }
-export function buildAccess(cfg, staff) {
-  const fromSheet = sheetAccessEmails(cfg.accessFromSheet, staff);
-  return { emails: uniqSorted([...cfg.envEmails, ...fromSheet]), domains: uniqSorted(cfg.envDomains) };
+async function commitGroups(store, groups) {
+  let n = 0;
+  for (const b of packGroups(groups)) { await store.commitBatch(b); n++; }
+  return n;
 }
 
-const parseJSONObj = s => {
-  if (typeof s !== 'string' || !s) return null;
-  try { const o = JSON.parse(s); return o && typeof o === 'object' && !Array.isArray(o) ? o : null; } catch { return null; }
-};
-const errMsg = e => String(e?.message || e || 'lỗi không xác định');
+// Chạy fn trên từng phần tử với tối đa `limit` lời gọi song song (giữ thứ tự kết quả).
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+const LIST_CONCURRENCY = 16;
+
+/* ---------------- Dữ liệu lần trước của một cấp (khi Sheet lỗi) ---------------- */
+async function loadPrevLevel(store, cap) {
+  const doc = await store.get(scopePath(scopeIdLevel(cap)));
+  if (!doc || !Array.isArray(doc.chunkIds)) return null;
+  const records = [];
+  for (const cid of doc.chunkIds) {
+    const c = await store.get(chunkPath(scopeIdLevel(cap), cid));
+    if (!c || typeof c.data !== 'string') return null; // không đủ dữ liệu → coi như không có
+    records.push(...JSON.parse(c.data));
+  }
+  return { records, crit: Array.isArray(doc.crit) ? doc.crit : [] };
+}
+
+// 'user:<email>' → 'user' (v2_meta/global ai có quyền cũng đọc được – không lộ email người bấm đồng bộ).
+export const publicTrigger = t => (/^user:/.test(String(t || '')) ? 'user' : String(t || ''));
+
+// Phiếu mới / sửa / xóa của phạm vi cấp `s` so với bản đang lưu: chỉ đọc các khối có hash khác lần trước.
+// prevCh: { cid: hash } của lần trước (null → không xác định, trả null). Khóa nhân thân (tp/op) không tính là “sửa”.
+async function levelChanges(store, s, prevCh) {
+  if (!s || !prevCh || typeof prevCh !== 'object') return null;
+  const now = new Map(s.chunks.map(c => [c.id, c]));
+  const oldIds = Object.keys(prevCh).filter(cid => now.get(cid)?.hash !== prevCh[cid]);
+  const newIds = s.chunks.filter(c => prevCh[c.id] !== c.hash).map(c => c.id);
+  if (!oldIds.length && !newIds.length) return { added: 0, updated: 0, removed: 0 };
+  const sig = r => { const { tp, op, ...x } = r; return JSON.stringify(x); }; // eslint-disable-line no-unused-vars
+  const before = new Map();
+  for (const cid of oldIds) {
+    const d = await store.get(chunkPath(s.id, cid));
+    if (!d || typeof d.data !== 'string') return null;
+    for (const r of parseJSON(d.data, [])) before.set(r.id, sig(r));
+  }
+  const after = new Map();
+  for (const cid of newIds) for (const r of JSON.parse(now.get(cid).data)) after.set(r.id, sig(r));
+  let added = 0, updated = 0, removed = 0;
+  for (const [id, x] of after) { if (!before.has(id)) added++; else if (before.get(id) !== x) updated++; }
+  for (const id of before.keys()) if (!after.has(id)) removed++;
+  return { added, updated, removed };
+}
 
 /* ---------------- Một lượt đồng bộ (đã giữ khóa) ---------------- */
-async function syncOnce({ store, fetchTable, cfg, trigger, clock, force }) {
+async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log }) {
   const startMs = clock();
   const warnings = [];
+  const logRaw = (what, e) => { if (e && !e.expose) log?.warn?.(`[sync] ${what}:`, e); };
+  const settle = p => Promise.resolve().then(() => p()).then(t => ({ t }), e => ({ e }));
+  const probe = (sheetId, tab) => (typeof fetchTable.isPublic === 'function'
+    ? Promise.resolve().then(() => fetchTable.isPublic(sheetId, tab)).catch(() => null)
+    : Promise.resolve(false));
 
-  // 1) Đọc Sheet (song song hai tab) + kiểm tra Sheet có đang công khai (“Bất kỳ ai có đường liên kết”) không.
-  //    fetchTable.isPublic (nếu có – xem makeSheetFetcher) → true | false | null (không rõ).
-  const probe = typeof fetchTable.isPublic === 'function'
-    ? Promise.resolve().then(() => fetchTable.isPublic(cfg.formGid)).catch(() => null)
-    : Promise.resolve(false);
-  const [formTable, staffRes, sheetPublic] = await Promise.all([
-    fetchTable(cfg.formGid),
-    cfg.staffGid ? fetchTable(cfg.staffGid).then(t => ({ t }), e => ({ e })) : Promise.resolve(null),
-    probe,
+  // 1) Đọc song song: mỗi cấp (biểu mẫu + DS Nhân sự + thăm dò chế độ chia sẻ) và tab Phân quyền.
+  const on = cfg.levels.filter(L => L.enabled);
+  const [fetchedLevels, rolesRes] = await Promise.all([
+    Promise.all(on.map(L => Promise.all([
+      settle(() => fetchTable(L.sheetId, { sheet: L.formTab })),
+      L.staffTab ? settle(() => fetchTable(L.sheetId, { sheet: L.staffTab })) : Promise.resolve(null),
+      probe(L.sheetId, { sheet: L.formTab }),
+    ]))),
+    cfg.rolesSheetId ? settle(() => fetchTable(cfg.rolesSheetId, { sheet: cfg.rolesTab })) : Promise.resolve(null),
   ]);
   const fetchMs = clock() - startMs;
 
-  // 2) Phân tích
-  let parsed;
-  try { parsed = parseFormTable(formTable); } catch (e) { throw publicError(errMsg(e), 'SHEET_STRUCTURE'); }
-  const { records, crit } = parsed;
-  let staffOk = true, staff = { teach: [], bgh: [], allEmails: [] };
-  if (staffRes?.e) {
-    staffOk = false;
-    warnings.push(`Không đọc được danh sách nhân sự (giữ nguyên dữ liệu cũ): ${errMsg(staffRes.e)}`);
-  } else if (staffRes?.t) {
-    try { staff = parseStaffTable(staffRes.t); } catch (e) {
-      staffOk = false;
-      warnings.push(`Không phân tích được danh sách nhân sự (giữ nguyên dữ liệu cũ): ${errMsg(e)}`);
+  const state = (await store.get(PATHS.state)) || {};
+  const prevLevels = state.levels && typeof state.levels === 'object' ? state.levels : {};
+  const prevStaffHashes = state.staffHashes && typeof state.staffHashes === 'object' ? state.staffHashes : {};
+  const cacheOps = [];
+
+  // 2) Từng cấp: phiếu (lỗi → giữ dữ liệu cũ của cấp đó) và DS Nhân sự (lỗi → bản lưu gần nhất)
+  const levels = {}, levelMeta = [], levelState = {}, staffHashes = { ...prevStaffHashes };
+  let formFailures = 0, firstFormError = null;
+  for (const L of cfg.levels) {
+    const { cap, label, color } = L;
+    if (!L.enabled) {
+      levels[cap] = { cap, enabled: false, records: [], crit: [], staffRows: [] };
+      levelMeta.push({ cap, label, color, enabled: false, count: 0, syncedAtMs: null, stale: false });
+      continue;
+    }
+    const [formRes, staffRes, isPublic] = fetchedLevels[on.indexOf(L)];
+    logRaw(`${label} – biểu mẫu`, formRes.e);
+    logRaw(`${label} – DS Nhân sự`, staffRes?.e);
+    let records = [], crit = [], stale = false, levelSyncedAtMs = startMs;
+    let formErr = formRes.e ? errMsg(formRes.e) : null;
+    if (!formErr) {
+      try { ({ records, crit } = parseFormTable(formRes.t, { cap })); } catch (e) { formErr = `tab “${L.formTab}”: ${String(e?.message || e)}`; }
+    }
+    const prevCount = Number(prevLevels[cap]?.count) || 0;
+    if (!formErr && !records.length && prevCount > 0 && !force) {
+      formErr = `Sheet trả về 0 phiếu trong khi lần trước có ${prevCount} phiếu`;
+    }
+    if (formErr) {
+      formFailures++;
+      firstFormError ||= formRes.e || publicError(`${label}: ${formErr}`, 'SHEET_STRUCTURE'); // lỗi lạ giữ nguyên → handler trả thông báo chung
+      const prev = await loadPrevLevel(store, cap);
+      stale = true;
+      levelSyncedAtMs = Number(prevLevels[cap]?.syncedAtMs) || null;
+      if (prev) { ({ records, crit } = prev); warnings.push(`${label}: không cập nhật được phiếu (${formErr}) – giữ nguyên dữ liệu lần đồng bộ trước.`); } else { records = []; crit = []; warnings.push(`${label}: không đọc được phiếu (${formErr}).`); }
+    }
+
+    let staffRows = [];
+    if (staffRes === null) {
+      warnings.push(`${label}: không đọc “DS Nhân sự” (SHEET_STAFF_TAB_${cap.toUpperCase()} đang tắt) – cấp này chỉ có quyền từ tab Phân quyền / ADMIN_EMAILS.`);
+    } else {
+      let err = staffRes.e ? errMsg(staffRes.e) : null, parsed = null;
+      if (!err) {
+        try { parsed = parseStaffTable(staffRes.t, { cap }); } catch (e) { err = String(e?.message || e); }
+        if (parsed && !parsed.recognized) err = `tab “${L.staffTab}” không có cột Họ và tên / Tổ/Bộ phận (sai tên tab? Google trả về tab đầu tiên khi tên tab không tồn tại)`;
+        else if (parsed && !parsed.rows.length && prevStaffHashes[cap]) err = 'danh sách trống';
+      }
+      if (err) {
+        const cached = await store.get(staffCachePath(cap));
+        staffRows = parseJSON(cached?.rows, []);
+        warnings.push(`${label}: không đọc được “DS Nhân sự” (${err}) – ${staffRows.length ? 'dùng bản lưu gần nhất' : 'chưa có bản lưu, tạm thời chưa có quyền tự động cho cấp này'}.`);
+      } else {
+        staffRows = parsed.rows;
+        const h = hash53(JSON.stringify(staffRows));
+        if (force || h !== prevStaffHashes[cap]) cacheOps.push({ type: 'set', path: staffCachePath(cap), data: { rows: JSON.stringify(staffRows), hash: h, savedAtMs: startMs } });
+        staffHashes[cap] = h;
+      }
+    }
+
+    // Đường dẫn Sheet chỉ đưa vào phạm vi cấp (BGH đọc) khi Sheet ĐÃ riêng tư.
+    if (isPublic === true) warnings.push(`${label}: Google Sheet đang ở chế độ “Bất kỳ ai có đường liên kết” – ai có link đều đọc được toàn bộ phiếu và DS Nhân sự (kể cả email). Hãy đặt “Bị hạn chế” và chia sẻ quyền Xem cho email service account.`);
+    levels[cap] = { cap, enabled: true, records, crit, staffRows, sheetUrl: isPublic === false ? sheetUrlOf(L.sheetId) : '', stale };
+    levelMeta.push({ cap, label, color, enabled: true, count: records.length, syncedAtMs: levelSyncedAtMs, stale });
+    levelState[cap] = { count: records.length, syncedAtMs: levelSyncedAtMs };
+  }
+  if (!on.length) throw publicError('Chưa cấu hình Google Sheet nào: đặt SHEET_ID_TIH / SHEET_ID_THCS / SHEET_ID_THPT trên Vercel.', 'CONFIG_SHEET_ID');
+  // Mọi cấp đều lỗi (thường do mạng/quyền) → dừng, không ghi gì (dữ liệu cũ giữ nguyên).
+  if (formFailures === on.length) throw firstFormError;
+
+  // 3) Tab Phân quyền (lỗi → bản lưu gần nhất; chưa có bản lưu → dừng để không cấp nhầm quyền đã bị thu hồi)
+  let rolesRows = [], rolesHash = state.rolesHash || '';
+  if (rolesRes) {
+    logRaw('Phân quyền', rolesRes.e);
+    let err = rolesRes.e ? errMsg(rolesRes.e) : null, parsed = null;
+    if (!err) {
+      parsed = parseRolesTable(rolesRes.t);
+      if (!parsed.recognized) err = `tab “${cfg.rolesTab}” không có cột Email và Vai trò (sai tên tab ROLES_TAB? Google trả về tab đầu tiên khi tên tab không tồn tại)`;
+    }
+    if (err) {
+      const cached = await store.get(PATHS.roles);
+      if (!cached) throw publicError(`Không đọc được tab Phân quyền (${err}) và chưa có bản lưu trước – dừng đồng bộ để không cấp nhầm quyền.`, 'ROLES_SHEET');
+      rolesRows = parseJSON(cached.rows, []);
+      warnings.push(`Không đọc được tab Phân quyền (${err}) – dùng bản lưu gần nhất.`);
+    } else {
+      rolesRows = parsed.rows;
+      const h = hash53(JSON.stringify(rolesRows));
+      if (force || h !== state.rolesHash) cacheOps.push({ type: 'set', path: PATHS.roles, data: { rows: JSON.stringify(rolesRows), hash: h, savedAtMs: startMs } });
+      rolesHash = h;
     }
   }
   const parseMs = clock() - startMs - fetchMs;
 
-  // 3) Trạng thái lần trước
-  const state = (await store.get(PATHS.state)) || {};
-  const prevHashes = parseJSONObj(state.phieuHashes);
-  const prevChunkHashes = parseJSONObj(state.chunkHashes) || {};
-  const trustState = !force && !!prevHashes;
-  const prevIds = trustState ? Object.keys(prevHashes) : await store.listIds(PATHS.phieu);
-  const prevIdSet = new Set(prevIds);
+  // 4) Quyền + số liệu đối sánh (công bố có “giữ”) + phạm vi
+  const { access, people, tos, warnings: roleWarnings, stats, recKeys, rowKey } = resolveAccess({ levels, rolesRows, env });
+  warnings.push(...roleWarnings);
+  const keyed = r => { const k = recKeys.get(r); return k ? { ...r, tp: k.tp, op: k.op } : r; };
+  const { bench, state: benchState } = publishBenchmarks({ groups: benchGroups(levels, keyed), prev: parseJSON(state.bench, {}), cutoff: benchCutoff(startMs) });
+  const scopes = buildScopes({ levels, people, tos, recKeys, rowKey, bench });
+  const nowMs = clock();
 
-  if (!records.length && prevIds.length && !force) {
-    throw publicError(`Sheet trả về 0 phiếu trong khi Firestore đang có ${prevIds.length} phiếu – dừng đồng bộ để tránh xóa nhầm dữ liệu. Kiểm tra lại Sheet/SHEET_GID_FORM.`, 'EMPTY_SHEET');
-  }
-
-  // 4) phieu/{id}: chỉ ghi phiếu mới/thay đổi, xóa phiếu đã bị xóa khỏi Sheet
-  const phieuOps = [];
-  const newHashes = {};
-  let added = 0, updated = 0, removed = 0;
-  for (const r of records) {
-    const h = phieuHash(r, crit);
-    newHashes[r.id] = h;
-    const existed = prevIdSet.has(r.id);
-    if (!existed) added++;
-    else if (!trustState || prevHashes[r.id] !== h) updated++;
-    else continue;
-    phieuOps.push({ type: 'set', path: `${PATHS.phieu}/${r.id}`, data: phieuDoc(r, crit, store) });
-  }
-  for (const id of prevIds) {
-    if (!(id in newHashes)) { removed++; phieuOps.push({ type: 'delete', path: `${PATHS.phieu}/${id}` }); }
+  // 5) So sánh với lần trước (hash) → thao tác ghi
+  const prevScopeHashes = parseJSON(state.scopeHashes, null);
+  const trust = !force && !!prevScopeHashes;
+  const prevChunkHashes = trust ? parseJSON(state.chunkHashes, {}) : {};
+  const prevAccess = trust ? parseJSON(state.accessHashes, {}) : {};
+  const [prevScopeIds, prevAccessIds] = trust
+    ? [Object.keys(prevScopeHashes), Object.keys(prevAccess)]
+    : await Promise.all([store.listIds(PATHS.scopes), store.listIds(PATHS.access)]);
+  // Không tin trạng thái (lần đầu, mất trạng thái, force): liệt kê khối hiện có của các phạm vi đã tồn tại (song song có giới hạn).
+  const listedChunks = new Map();
+  if (!trust) {
+    const lists = await mapLimit(prevScopeIds, LIST_CONCURRENCY, id => store.listIds(chunksCol(id)));
+    prevScopeIds.forEach((id, i) => listedChunks.set(id, lists[i]));
   }
 
-  // 5) dashboard_chunks: ghi khối có hash đổi, xóa khối thừa
-  const chunks = chunkRecords(records, CHUNK_OPTS);
-  const existingChunks = new Set(await store.listIds(PATHS.chunks));
-  const dashOps = [];
-  const newChunkHashes = {};
-  let chunksWritten = 0, chunksDeleted = 0;
-  const chunkInfo = [];
-  for (const c of chunks) {
-    newChunkHashes[c.id] = c.hash;
-    const write = force || !existingChunks.has(c.id) || prevChunkHashes[c.id] !== c.hash;
-    chunkInfo.push({ id: c.id, n: c.n, bytes: c.data.length, written: write });
-    if (!write) continue;
-    chunksWritten++;
-    dashOps.push({ type: 'set', path: `${PATHS.chunks}/${c.id}`, data: { i: c.i, n: c.n, data: c.data, hash: c.hash } });
-  }
-  for (const id of existingChunks) {
-    if (!(id in newChunkHashes)) { chunksDeleted++; dashOps.push({ type: 'delete', path: `${PATHS.chunks}/${id}` }); }
+  if (!Object.keys(access).length && prevAccessIds.length && !force) {
+    throw publicError(`Không tính được quyền cho ai trong khi đang có ${prevAccessIds.length} tài khoản được cấp quyền – dừng đồng bộ để tránh thu hồi nhầm. Kiểm tra “DS Nhân sự” / tab Phân quyền.`, 'EMPTY_ACCESS');
   }
 
-  // 6) dashboard/staff (không chứa email)
-  const staffDoc = {
-    teach: staff.teach.map(({ name, group, role }) => ({ name, group, role })),
-    bgh: staff.bgh.map(({ name, role }) => ({ name, role })),
-  };
-  const staffHash = hash53(JSON.stringify(staffDoc));
-  const curStaff = await store.get(PATHS.staff);
-  let staffChanged = false;
-  if (staffOk && (force || state.staffHash !== staffHash || !curStaff)) {
-    staffChanged = true;
-    dashOps.push({ type: 'set', path: PATHS.staff, data: staffDoc });
-  } else if (!staffOk && !curStaff) {
-    // Lần đầu mà chưa đọc được DS Nhân sự: ghi tài liệu rỗng để dashboard không phải chờ; lần sau sẽ ghi đủ.
-    staffChanged = true;
-    dashOps.push({ type: 'set', path: PATHS.staff, data: { teach: [], bgh: [] } });
-  }
-  const staffCount = staffOk ? staffDoc.teach.length + staffDoc.bgh.length
-    : ((curStaff?.teach?.length || 0) + (curStaff?.bgh?.length || 0));
-
-  // 7) config/access (chỉ máy chủ & security rules đọc)
-  const access = buildAccess(cfg, staff);
-  const accessHash = hash53(JSON.stringify(access));
-  const curAccess = await store.get(PATHS.access);
-  // Nếu danh sách lấy từ Sheet mà không đọc được tab nhân sự → giữ nguyên quyền cũ (trừ khi chưa có gì)
-  const accessKnown = staffOk || cfg.accessFromSheet === '0';
-  let accessChanged = false;
-  if ((accessKnown || !curAccess) && (force || state.accessHash !== accessHash || !curAccess)) {
-    accessChanged = true;
-    dashOps.push({ type: 'set', path: PATHS.access, data: { ...access, updatedAt: store.serverTimestamp() } });
-  }
-  const effectiveAccess = accessChanged || accessKnown ? access : { emails: curAccess?.emails || [], domains: curAccess?.domains || [] };
-  if (!effectiveAccess.emails.length && !effectiveAccess.domains.length) {
-    warnings.push('Danh sách quyền truy cập đang trống: chưa ai xem được dashboard. Đặt ALLOWED_DOMAINS (bỏ giá trị none), ALLOWED_EMAILS, hoặc điền cột Email trong tab “DS Nhân sự”.');
-  }
-  if (cfg.accessFromSheet === 'bgh' && staffOk && cfg.staffGid) {
-    const missing = staff.bgh.filter(b => !splitEmails(b.email).length).length;
-    if (missing) warnings.push(`${missing} thành viên BGH trong “DS Nhân sự” chưa có email hợp lệ nên chưa được cấp quyền theo danh sách email.`);
-  }
-  if (cfg.accessFromSheet !== '0' && staffOk && !cfg.staffGid) {
-    warnings.push('ACCESS_FROM_SHEET đang bật nhưng SHEET_GID_STAFF bị tắt: không lấy được email nào từ “DS Nhân sự”.');
-  }
-  // Đường dẫn Sheet chỉ được đưa lên dashboard khi Sheet ĐÃ ở chế độ riêng tư (false). Khi Sheet còn công khai,
-  // ai có link đều đọc được toàn bộ câu trả lời và DS Nhân sự (kể cả email) mà không cần đăng nhập → ẩn link.
-  const sheetUrl = sheetPublic === false ? sheetUrlOf(cfg.sheetId, cfg.formGid) : '';
-  if (sheetPublic === true) {
-    warnings.push('Google Sheet đang ở chế độ “Bất kỳ ai có đường liên kết”: ai có link đều đọc được toàn bộ câu trả lời và “DS Nhân sự” (kể cả email) mà không cần đăng nhập. Đường dẫn Sheet đã được ẩn khỏi dashboard. Hãy đặt Sheet ở chế độ “Bị hạn chế” và chia sẻ quyền Xem cho email service account (README, bước 2).');
+  // Số phiếu mới / sửa / xóa của từng cấp (để báo cho người bấm “Đồng bộ ngay”): so sánh các khối ĐÃ ĐỔI của phạm vi cấp với
+  // bản đang lưu (đọc trước khi ghi). Không tin trạng thái (lần đầu, force) → ước lượng theo số phiếu.
+  const changes = {};
+  for (const L of cfg.levels.filter(x => x.enabled)) {
+    const s = scopes.find(x => x.id === scopeIdLevel(L.cap));
+    const count = s?.doc.count || 0;
+    const prevCount = Number(prevLevels[L.cap]?.count);
+    changes[L.cap] = await levelChanges(store, s, trust ? parseJSON(state.chunkHashes, {})[scopeIdLevel(L.cap)] : null)
+      || (Number.isFinite(prevCount) ? { added: Math.max(0, count - prevCount), updated: 0, removed: Math.max(0, prevCount - count) } : { added: count, updated: 0, removed: 0 });
   }
 
-  // 8) dashboard/meta – luôn ghi lại
+  const newScopeHashes = {}, newChunkHashes = {};
+  const scopeGroups = [];
+  let scopesWritten = 0, chunksWritten = 0, chunksDeleted = 0, scopesDeleted = 0;
+  for (const s of scopes) {
+    newScopeHashes[s.id] = s.doc.hash;
+    newChunkHashes[s.id] = Object.fromEntries(s.chunks.map(c => [c.id, c.hash]));
+    const prevCh = trust ? prevChunkHashes[s.id] || {} : null;
+    const ops = [];
+    for (const c of s.chunks) {
+      if (trust && prevCh[c.id] === c.hash) continue;
+      ops.push({ type: 'set', path: chunkPath(s.id, c.id), data: { i: c.i, n: c.n, data: c.data, hash: c.hash } });
+      chunksWritten++;
+    }
+    const oldChunkIds = trust ? Object.keys(prevCh) : listedChunks.get(s.id) || [];
+    for (const cid of oldChunkIds) {
+      if (!(cid in newChunkHashes[s.id])) { ops.push({ type: 'delete', path: chunkPath(s.id, cid) }); chunksDeleted++; }
+    }
+    if (!trust || prevScopeHashes[s.id] !== s.doc.hash || ops.length) {
+      ops.push({ type: 'set', path: scopePath(s.id), data: { ...s.doc, syncedAtMs: nowMs } });
+      scopesWritten++;
+    }
+    if (ops.length) scopeGroups.push(ops);
+  }
+
+  // Quyền: thu hẹp/thu hồi ghi TRƯỚC khi ghi dữ liệu; mở rộng ghi SAU khi các phạm vi mới đã tồn tại.
+  const accessFirst = [], accessAfter = [], newAccessHashes = {};
+  let accessWritten = 0, accessDeleted = 0;
+  for (const [email, a] of Object.entries(access)) {
+    const h = hash53(JSON.stringify(a));
+    newAccessHashes[email] = { h, s: a.scopes };
+    const prev = trust ? prevAccess[email] : null;
+    if (prev?.h === h) continue;
+    const op = { type: 'set', path: accessPath(email), data: { ...a, updatedAtMs: nowMs } };
+    (prev && a.scopes.every(x => (prev.s || []).includes(x)) ? accessFirst : accessAfter).push([op]);
+    accessWritten++;
+  }
+  for (const email of prevAccessIds) {
+    if (!(email in access)) { accessFirst.push([{ type: 'delete', path: accessPath(email) }]); accessDeleted++; }
+  }
+  const staleScopeGroups = [];
+  for (const id of prevScopeIds) {
+    if (id in newScopeHashes) continue;
+    const cids = trust ? Object.keys(prevChunkHashes[id] || {}) : listedChunks.get(id) || [];
+    staleScopeGroups.push([...cids.map(cid => ({ type: 'delete', path: chunkPath(id, cid) })), { type: 'delete', path: scopePath(id) }]);
+    chunksDeleted += cids.length;
+    scopesDeleted++;
+  }
+
+  // 6) Ghi: thu hẹp quyền → phạm vi → mở rộng quyền → xóa phạm vi thừa → meta (+ bản lưu) → trạng thái.
+  //    Lỗi giữa chừng: trạng thái cũ được giữ nên lần sau ghi lại đúng phần còn thiếu (các thao tác đều idempotent).
+  const tWrite = clock();
+  let batches = 0;
+  batches += await commitGroups(store, accessFirst);
+  batches += await commitGroups(store, scopeGroups);
+  batches += await commitGroups(store, accessAfter);
+  batches += await commitGroups(store, staleScopeGroups);
   const durationMs = clock() - startMs;
   const syncedAtMs = clock();
-  dashOps.push({
-    type: 'set', path: PATHS.meta,
-    data: {
-      version: SCHEMA_VERSION,
-      syncedAt: store.serverTimestamp(),
-      syncedAtMs,
-      count: records.length,
-      chunkIds: chunks.map(c => c.id),
-      crit,
-      staffCount,
-      trigger,
-      sheetUrl,
-      durationMs,
-    },
-  });
-  if (dashOps.length > MAX_BATCH_OPS) throw publicError(`Quá nhiều thao tác ghi dashboard trong một lô (${dashOps.length}).`, 'BATCH_TOO_LARGE');
-
-  // 9) Ghi: dashboard (nguyên tử) → phieu (theo lô) → trạng thái.
-  //    Nếu bước phieu lỗi, trạng thái cũ được giữ nên lần sau sẽ ghi lại (thao tác ghi là idempotent).
-  const tWrite = clock();
-  await store.commitBatch(dashOps);
-  await store.commitMany(phieuOps, PHIEU_BATCH);
+  const count = levelMeta.reduce((s, l) => s + l.count, 0);
+  // trigger công khai cho mọi người có quyền → không ghi email người bấm đồng bộ (chỉ lưu trong v2_config/state.lastTrigger).
+  const meta = { version: SCHEMA_VERSION_V2, syncedAtMs, levels: levelMeta, trigger: publicTrigger(trigger), durationMs };
+  await store.commitBatch([{ type: 'set', path: PATHS.meta, data: meta }, ...cacheOps]);
+  batches++;
   const finishedMs = clock();
+  const sum = k => Object.values(changes).reduce((n, c) => n + (c[k] || 0), 0);
   const result = {
-    ok: true, count: records.length, added, updated, removed,
-    chunksWritten, chunksDeleted, staffChanged, accessChanged,
+    ok: true, count, added: sum('added'), updated: sum('updated'), removed: sum('removed'),
+    levels: Object.fromEntries(levelMeta.map(l => [l.cap, { enabled: l.enabled, count: l.count, stale: l.stale, ...(changes[l.cap] || {}) }])),
+    scopes: scopes.length, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted,
+    accessCount: Object.keys(access).length, accessWritten, accessDeleted,
     durationMs: finishedMs - startMs, syncedAtMs, trigger,
   };
   await store.commitBatch([{
     type: 'set', path: PATHS.state,
     data: {
-      phieuHashes: JSON.stringify(newHashes),
+      version: SCHEMA_VERSION_V2,
+      scopeHashes: JSON.stringify(newScopeHashes),
       chunkHashes: JSON.stringify(newChunkHashes),
-      staffHash: staffOk ? staffHash : (state.staffHash || ''),
-      accessHash: accessChanged || accessKnown ? accessHash : (state.accessHash || ''),
+      accessHashes: JSON.stringify(newAccessHashes),
+      levels: levelState,
+      staffHashes,
+      rolesHash,
+      bench: JSON.stringify(benchState),
       lastRunMs: finishedMs,
       lastTrigger: trigger,
-      lastResult: { count: result.count, added, updated, removed, chunksWritten, chunksDeleted, staffChanged, accessChanged, durationMs: result.durationMs, warnings: warnings.length },
+      lastResult: { count, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted, accessWritten, accessDeleted, durationMs: result.durationMs, warnings: warnings.length },
     },
   }]);
 
@@ -275,44 +415,38 @@ async function syncOnce({ store, fetchTable, cfg, trigger, clock, force }) {
     ...result,
     warnings,
     debug: {
-      fetchMs, parseMs, writeMs: clock() - tWrite,
-      records: records.length, crit: crit.length,
-      teach: staffDoc.teach.length, bgh: staffDoc.bgh.length,
-      accessMode: cfg.accessFromSheet, accessEmails: effectiveAccess.emails.length, accessDomains: [...effectiveAccess.domains],
-      sheetPublic,
-      chunks: chunkInfo, phieuOps: phieuOps.length, dashOps: dashOps.length,
+      fetchMs, parseMs, writeMs: clock() - tWrite, batches,
+      stats,
+      scopeSizes: scopes.map(s => ({ id: s.id, kind: s.doc.kind, count: s.doc.count, chunks: s.chunks.length, bytes: s.chunks.reduce((n, c) => n + c.data.length, 0) })),
     },
+    // Chỉ dùng cho dry-run / kiểm thử (không trả về qua HTTP)
+    _internal: { access, people, scopes, levels },
   };
 }
 
+const SUM_KEYS = ['scopesWritten', 'scopesDeleted', 'chunksWritten', 'chunksDeleted', 'accessWritten', 'accessDeleted', 'added', 'updated', 'removed'];
 function mergeResults(a, b) {
   if (!a) return { ...b, runs: 1 };
-  return {
-    ...b,
-    added: a.added + b.added, updated: a.updated + b.updated, removed: a.removed + b.removed,
-    chunksWritten: a.chunksWritten + b.chunksWritten, chunksDeleted: a.chunksDeleted + b.chunksDeleted,
-    staffChanged: a.staffChanged || b.staffChanged, accessChanged: a.accessChanged || b.accessChanged,
-    durationMs: a.durationMs + b.durationMs,
-    warnings: [...new Set([...a.warnings, ...b.warnings])],
-    runs: a.runs + 1,
-  };
+  const out = { ...b, durationMs: a.durationMs + b.durationMs, warnings: [...new Set([...a.warnings, ...b.warnings])], runs: a.runs + 1 };
+  for (const k of SUM_KEYS) out[k] = (a[k] || 0) + (b[k] || 0);
+  return out;
 }
 
 /**
- * Đồng bộ Sheet → kho.
+ * Đồng bộ các Sheet → kho (v2).
  * @param {object} p
  * @param {object} p.store         firestoreStore(db) hoặc memoryStore()
- * @param {(gid:string)=>Promise<object>} p.fetchTable  trả về `table` của gviz
- * @param {object} [p.env]         biến môi trường (SHEET_ID, SHEET_GID_FORM, SHEET_GID_STAFF, ALLOWED_EMAILS, ALLOWED_DOMAINS, ACCESS_FROM_SHEET)
- * @returns {Promise<object>}  { ok, skipped?, count, added, updated, removed, chunksWritten, chunksDeleted, staffChanged,
- *                               accessChanged, durationMs, syncedAtMs, trigger, warnings, runs, debug }
- *                               skipped: 'recent' (người dùng bấm lại < 60 s: ok:true nếu lượt trước thành công,
- *                                        ok:false + error nếu lượt trước thất bại) | 'locked' (ok:false, đang có lượt khác)
+ * @param {(sheetId:string, tab:{sheet:string})=>Promise<object>} p.fetchTable  trả về `table` của gviz (có thể có .isPublic(sheetId, tab))
+ * @param {object} [p.env]         biến môi trường (xem readSyncConfig)
  * @param {string} [p.trigger]     'cron' | 'webhook' | 'user:<email>' | 'dry-run' …
  * @param {number|(()=>number)} [p.nowMs]  thời điểm bắt đầu (ms) hoặc hàm đồng hồ
- * @param {boolean} [p.force]      ghi lại toàn bộ, bỏ qua hash và giới hạn tần suất
+ * @param {boolean} [p.force]      ghi lại toàn bộ, bỏ qua hash, giới hạn tần suất và các chốt chặn “0 phiếu”
+ * @param {{warn:Function}} [p.log] nơi ghi chi tiết lỗi lạ (mặc định console)
+ * @returns {Promise<object>} { ok, skipped?, count, levels, scopes, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted,
+ *   accessCount, accessWritten, accessDeleted, durationMs, syncedAtMs, trigger, warnings, runs, debug }
+ *   skipped: 'recent' (người dùng bấm lại < 60 s: ok:true nếu lượt trước thành công, ok:false + error nếu thất bại) | 'locked'
  */
-export async function runSync({ store, fetchTable, env = {}, trigger = 'manual', nowMs, force = false } = {}) {
+export async function runSync({ store, fetchTable, env = {}, trigger = 'manual', nowMs, force = false, log = console } = {}) {
   if (!store || typeof fetchTable !== 'function') throw new TypeError('runSync cần store và fetchTable');
   let clock;
   if (typeof nowMs === 'function') clock = () => Math.round(nowMs());
@@ -323,12 +457,11 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
   }
   const startMs = clock();
   const cfg = readSyncConfig(env);
-  const empty = { count: null, added: 0, updated: 0, removed: 0, chunksWritten: 0, chunksDeleted: 0, staffChanged: false, accessChanged: false };
+  const empty = { count: null, scopesWritten: 0, scopesDeleted: 0, chunksWritten: 0, chunksDeleted: 0, accessWritten: 0, accessDeleted: 0 };
 
-  // Giới hạn tần suất cho người dùng bấm “Làm mới” / “Tự đồng bộ” (cron và Apps Script không bị giới hạn).
-  //  • lượt trước THÀNH CÔNG < 60 s → { ok:true, skipped:'recent' } (dữ liệu vốn đã mới);
-  //  • lượt trước (bắt đầu < 60 s) THẤT BẠI → { ok:false, skipped:'recent', error } (handler trả 429), để không ai
-  //    gọi dồn dập vào một lượt đồng bộ đang lỗi. Thời điểm bắt đầu lượt gần nhất = config/syncLock.acquiredAt.
+  // Giới hạn tần suất cho người dùng (cron và Apps Script không bị giới hạn) – như v1:
+  //  • lượt trước THÀNH CÔNG < 60 s → { ok:true, skipped:'recent' };
+  //  • lượt trước (bắt đầu < 60 s) THẤT BẠI → { ok:false, skipped:'recent', error } (handler trả 429).
   if (/^user:/.test(trigger) && !force) {
     const [st, lk] = await Promise.all([store.get(PATHS.state), store.get(PATHS.lock)]);
     const lastOk = Number(st?.lastRunMs) || 0;
@@ -340,7 +473,7 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
         retryAfterMs: RATE_LIMIT_MS - (startMs - lastOk),
       };
     }
-    const running = (Number(lk?.until) || 0) > startMs; // đang có lượt chạy → để acquireLock trả 'locked'
+    const running = (Number(lk?.until) || 0) > startMs;
     if (!running && lastTry > lastOk && startMs >= lastTry && startMs - lastTry < RATE_LIMIT_MS) {
       const retryAfterMs = RATE_LIMIT_MS - (startMs - lastTry);
       return {
@@ -352,15 +485,13 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
   }
 
   const token = await store.acquireLock(startMs, LOCK_TTL_MS);
-  if (!token) {
-    return { ok: false, skipped: 'locked', ...empty, durationMs: clock() - startMs, syncedAtMs: null, trigger };
-  }
+  if (!token) return { ok: false, skipped: 'locked', ...empty, durationMs: clock() - startMs, syncedAtMs: null, trigger };
 
   let total = null;
   let released = false;
   try {
     for (;;) {
-      const r = await syncOnce({ store, fetchTable, cfg, trigger, clock, force });
+      const r = await syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log });
       total = mergeResults(total, r);
       const canRerun = total.runs <= MAX_RERUNS && clock() - startMs < RERUN_BUDGET_MS;
       const again = await store.releaseLock(token, { nowMs: clock(), ttlMs: LOCK_TTL_MS, rerun: canRerun });
@@ -374,8 +505,8 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
 }
 
 /* ---------------- Bộ chuyển đổi Firestore (firebase-admin) ---------------- */
-export function firestoreStore(db) {
-  const lockRef = db.doc(PATHS.lock);
+export function firestoreStore(db, { lockPath = PATHS.lock } = {}) {
+  const lockRef = db.doc(lockPath);
   const applyOps = (batch, ops) => {
     for (const op of ops) {
       const ref = db.doc(op.path);
@@ -400,7 +531,7 @@ export function firestoreStore(db) {
       applyOps(batch, ops);
       await batch.commit();
     },
-    async commitMany(ops, size = PHIEU_BATCH) {
+    async commitMany(ops, size = WRITE_BATCH) {
       for (let i = 0; i < ops.length; i += size) {
         const batch = db.batch();
         applyOps(batch, ops.slice(i, i + size));

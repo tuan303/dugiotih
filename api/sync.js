@@ -1,19 +1,21 @@
-// Vercel Function: /api/sync – đồng bộ Google Sheet → Firestore.
+// Vercel Function: /api/sync – đồng bộ Google Sheet của các cấp (+ tab Phân quyền) → Firestore (bố cục v2).
 //   GET  – Vercel Cron (Authorization: Bearer <CRON_SECRET>)
-//   POST – Apps Script (Bearer <SYNC_SECRET>) hoặc người dùng bấm “Làm mới”
-//          (Bearer <Firebase ID token> của tài khoản Microsoft 365 – nhà cung cấp 'microsoft.com').
+//   POST – Apps Script (Bearer <SYNC_SECRET>) hoặc người dùng bấm “Đồng bộ ngay”
+//          (Bearer <Firebase ID token> của tài khoản Microsoft 365 – nhà cung cấp 'microsoft.com'; email thuộc
+//          ALLOWED_DOMAINS, có trong ADMIN_EMAILS, hoặc đã có v2_access/{email}). Tài khoản cùng tên miền nhưng chưa có
+//          v2_access chỉ nhận { ok, skipped, syncedAtMs, … } (không có số phiếu / số tài khoản).
 //   ?force=1 (CHỈ với CRON_SECRET): ghi lại toàn bộ, bỏ qua so sánh hash. Không nhận với SYNC_SECRET (bí mật này nằm
 //            trong Script Properties – mọi người có quyền sửa Sheet đều đọc được) để tránh bị lạm dụng ghi hàng loạt.
-// Trả về JSON { ok, skipped?, count, added, updated, removed, chunksWritten, staffChanged, accessChanged,
-//               durationMs, syncedAtMs, trigger, … }; 401/403 khi không được phép, 409 khi đang có lượt khác,
-//               429 khi người dùng gọi lại < 60 s sau một lượt đồng bộ thất bại, 500 khi lỗi.
+// Trả về JSON { ok, skipped?, count, added, updated, removed, levels, scopes, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted,
+//               accessCount, accessWritten, accessDeleted, durationMs, syncedAtMs, trigger, warnings?, … };
+//               401/403 khi không được phép, 409 khi đang có lượt khác, 429 khi người dùng gọi lại < 60 s sau một lượt
+//               đồng bộ thất bại, 500 khi lỗi. `warnings` (có thể nêu email/tên trong DS Nhân sự, tab Phân quyền) chỉ trả cho
+//               cron, Apps Script và ADMIN_EMAILS; người dùng khác nhận `warningCount`.
 // firebase-admin chỉ được khởi tạo khi cần (sau khi đã có token), nên các nhánh 401 chạy được cả khi chưa có service account.
 // Các thư viện nặng (firebase-admin, google-auth-library) được nạp động bên trong handler: nếu nạp lỗi trên Vercel,
 // hàm trả JSON 500 nêu rõ nguyên nhân thay vì sập (FUNCTION_INVOCATION_FAILED).
 // Điều kiện bảo mật của đăng nhập Microsoft (App registration SINGLE-TENANT): xem server/auth.js.
 import { authorize } from '../server/auth.js';
-
-const ACCESS_PATH = 'config/access';
 
 // Nạp các module máy chủ một lần cho mỗi instance; lỗi nạp không được cache để lần sau thử lại.
 let modsPromise = null;
@@ -34,10 +36,12 @@ function errorDetail(e) {
 }
 
 const PUBLIC_FIELDS = [
-  'ok', 'skipped', 'count', 'added', 'updated', 'removed', 'chunksWritten', 'chunksDeleted',
-  'staffChanged', 'accessChanged', 'durationMs', 'syncedAtMs', 'trigger', 'runs', 'warnings', 'retryAfterMs',
+  'ok', 'skipped', 'count', 'added', 'updated', 'removed', 'levels', 'scopes', 'scopesWritten', 'scopesDeleted', 'chunksWritten', 'chunksDeleted',
+  'accessCount', 'accessWritten', 'accessDeleted', 'durationMs', 'syncedAtMs', 'trigger', 'runs', 'retryAfterMs',
 ];
-const pick = r => Object.fromEntries(PUBLIC_FIELDS.filter(k => r[k] !== undefined).map(k => [k, r[k]]));
+// Tài khoản cùng tên miền nhưng CHƯA được cấp quyền xem (không có v2_access): chỉ biết lượt đồng bộ chạy hay chưa.
+const MINIMAL_FIELDS = ['ok', 'skipped', 'durationMs', 'syncedAtMs', 'retryAfterMs'];
+const pick = (r, fields = PUBLIC_FIELDS) => Object.fromEntries(fields.filter(k => r[k] !== undefined).map(k => [k, r[k]]));
 
 // Thông báo lỗi an toàn (không lộ bí mật/stack). Lỗi do ta tạo (expose) giữ nguyên nội dung.
 export function friendlyError(e) {
@@ -67,7 +71,7 @@ function send(res, status, body) {
  * @param {object} [deps.env]                       mặc định process.env
  * @param {() => object} [deps.getStore]            mặc định firestoreStore(getDb())
  * @param {(token:string)=>Promise<object>} [deps.verifyIdToken]
- * @param {(p:{sheetId:string, env:object})=>Function} [deps.makeFetchTable]
+ * @param {(p:{env:object}, mods:object)=>Function} [deps.makeFetchTable]  trả về fetchTable(sheetId, tab)
  * @param {() => number} [deps.now]
  * @param {Console} [deps.log]
  */
@@ -84,7 +88,7 @@ export function createHandler(deps = {}) {
   const makeFetchTable = deps.makeFetchTable || ((p, m) => {
     let serviceAccount = null;
     try { serviceAccount = m.getServiceAccount(); } catch { /* chưa cấu hình → đọc Sheet công khai */ }
-    return m.makeSheetFetcher({ sheetId: p.sheetId, serviceAccount });
+    return m.makeMultiSheetFetcher({ serviceAccount });
   });
 
   return async function handler(req, res) {
@@ -110,7 +114,7 @@ export function createHandler(deps = {}) {
         authorization: req.headers?.authorization,
         env,
         verifyIdToken: verifyIdTokenWith(mods),
-        getAccess: () => lazyStore().get(mods.PATHS?.access || ACCESS_PATH),
+        hasAccess: async email => !!(await lazyStore().get(mods.accessPath(email))),
       });
     } catch (e) {
       log.error('[sync] lỗi khi xác thực:', e);
@@ -119,7 +123,7 @@ export function createHandler(deps = {}) {
     if (!auth.ok) return send(res, auth.status, { ok: false, error: auth.error });
 
     const cfg = mods.readSyncConfig(env);
-    if (!cfg.sheetId) return send(res, 500, { ok: false, error: 'Chưa cấu hình biến môi trường SHEET_ID trên Vercel.', trigger: auth.trigger });
+    if (!cfg.levels.some(l => l.enabled)) return send(res, 500, { ok: false, error: 'Chưa cấu hình Google Sheet nào: đặt SHEET_ID_TIH / SHEET_ID_THCS / SHEET_ID_THPT trên Vercel.', trigger: auth.trigger });
 
     let force = false;
     try {
@@ -130,15 +134,21 @@ export function createHandler(deps = {}) {
     try {
       const result = await mods.runSync({
         store: lazyStore(),
-        fetchTable: makeFetchTable({ sheetId: cfg.sheetId, env }, mods),
+        fetchTable: makeFetchTable({ env }, mods),
         env,
         trigger: auth.trigger,
         nowMs: now(),
         force,
+        log,
       });
       if (result.warnings?.length) log.warn('[sync] cảnh báo:', result.warnings.join(' | '));
       const status = result.skipped === 'locked' ? 409 : (result.ok === false && result.skipped === 'recent') ? 429 : 200;
-      const body = pick(result);
+      const minimal = !!auth.email && !auth.admin && !auth.viewer;
+      const body = pick(result, minimal ? MINIMAL_FIELDS : PUBLIC_FIELDS);
+      if (Array.isArray(result.warnings) && !minimal) {
+        if (!auth.email || auth.admin) body.warnings = result.warnings;
+        else body.warningCount = result.warnings.length;
+      }
       if (result.skipped === 'locked') body.error = 'Đang có một lượt đồng bộ khác chạy. Dữ liệu mới sẽ được cập nhật ngay sau lượt đó.';
       else if (status === 429) {
         body.error = result.error || 'Vui lòng thử lại sau ít phút.';
