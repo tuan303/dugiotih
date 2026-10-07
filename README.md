@@ -413,8 +413,18 @@ npm test                                      # kiểm thử offline (scripts/*.
 
 ## Xử lý sự cố
 
+> [!IMPORTANT]
+> **Bật Google Sheets API** cho project `dugiotih`: https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=dugiotih → **Enable**.
+> Máy chủ đọc Sheet bằng Sheets API nên lấy **đủ mọi dòng** kể cả khi Sheet đang bật **bộ lọc**. Chưa bật thì máy chủ
+> tạm đọc qua gviz (chỉ thấy các dòng đang hiển thị) và kèm cảnh báo; nếu số phiếu giảm quá nửa so với lần trước,
+> đồng bộ dừng lại để không xóa dữ liệu trên dashboard.
+
+## Xử lý sự cố
+
 | Hiện tượng | Nguyên nhân thường gặp | Cách xử lý |
 |---|---|---|
+| Số phiếu ít hơn trên Sheet; bỏ bộ lọc trên Sheet thì số phiếu tăng | Google Sheets API chưa bật → đọc qua gviz, chỉ thấy các dòng đang hiển thị | Bật Google Sheets API (ô lưu ý ở trên) rồi bấm **Làm mới** |
+| Đồng bộ báo “Số phiếu giảm bất thường …” | Sheet đang bật bộ lọc (khi API chưa bật) hoặc nhiều dòng bị xóa | Bật Sheets API / bỏ lọc rồi Làm mới; nếu thật sự đã xóa, đồng bộ bằng `CRON_SECRET` kèm `?force=1` |
 | Dashboard báo `permission-denied` / “Missing or insufficient permissions” | Chưa đồng bộ lần nào (chưa có `config/access`); email/tên miền không có trong danh sách; chưa triển khai `firestore.rules` | Chạy đồng bộ (bước 6); kiểm tra [Quản lý quyền xem](#quản-lý-quyền-xem); triển khai rules (bước 4). |
 | `auth/unauthorized-domain` | Tên miền đang mở chưa có trong *Authorized domains* (kể cả link Preview của Vercel) | Firebase → Authentication → Settings → *Authorized domains* → thêm tên miền; hoặc dùng tên miền Production. |
 | `auth/operation-not-allowed` | Chưa bật nhà cung cấp **Microsoft** trong Firebase | Làm lại bước 2 (Sign-in method → Microsoft → Enable). |

@@ -114,6 +114,7 @@ async function syncOnce({ store, fetchTable, cfg, trigger, clock, force }) {
     probe,
   ]);
   const fetchMs = clock() - startMs;
+  if (fetchTable.warnings) for (const w of fetchTable.warnings) warnings.push(w);
 
   // 2) Phân tích
   let parsed;
@@ -141,6 +142,10 @@ async function syncOnce({ store, fetchTable, cfg, trigger, clock, force }) {
 
   if (!records.length && prevIds.length && !force) {
     throw publicError(`Sheet trả về 0 phiếu trong khi Firestore đang có ${prevIds.length} phiếu – dừng đồng bộ để tránh xóa nhầm dữ liệu. Kiểm tra lại Sheet/SHEET_GID_FORM.`, 'EMPTY_SHEET');
+  }
+  // Số phiếu giảm quá nửa: thường do Sheet đang bật BỘ LỌC (khi đọc qua gviz) hoặc bị xóa nhầm → dừng, không xóa dữ liệu.
+  if (records.length && prevIds.length >= 20 && records.length < prevIds.length * 0.5 && !force) {
+    throw publicError(`Số phiếu giảm bất thường từ ${prevIds.length} xuống ${records.length} – có thể Sheet đang bật bộ lọc hoặc bị xóa nhầm dữ liệu. Đã dừng đồng bộ để không xóa dữ liệu trên dashboard.`, 'RECORD_DROP');
   }
 
   // 4) phieu/{id}: chỉ ghi phiếu mới/thay đổi, xóa phiếu đã bị xóa khỏi Sheet

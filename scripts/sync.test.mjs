@@ -11,7 +11,8 @@ import {
   authorize, secretEquals, bearerToken, envDomains, accessFromSheetMode, isEmailAllowed, splitEmails, splitDomains,
 } from '../server/auth.js';
 import { memoryStore } from '../server/memory-store.js';
-import { parseGvizBody, fetchGvizTable, makeSheetFetcher, gvizUrl } from '../server/sheet.js';
+import { parseGvizBody, fetchGvizTable, makeSheetFetcher, gvizUrl, valuesToTable, fetchSheetsApiTable } from '../server/sheet.js';
+import { parseFormTable } from '../lib/shared.js';
 import { getServiceAccount } from '../server/firebase.js';
 import defaultHandler, { createHandler } from '../api/sync.js';
 
@@ -970,6 +971,8 @@ describe('sheet.js – gviz', () => {
   const wrap = obj => `/*O_o*/\ngoogle.visualization.Query.setResponse(${JSON.stringify(obj)});`;
   const okBody = wrap({ version: '0.6', status: 'ok', table: { cols: [{ id: 'A', label: 'x', type: 'string' }], rows: [{ c: [{ v: 'a);b' }] }] } });
   const resp = (body, status = 200, type = 'application/javascript; charset=utf-8') => new Response(body, { status, headers: { 'content-type': type } });
+  const isApi = url => String(url).startsWith('https://sheets.googleapis.com/');
+  const apiDisabled = () => new Response(JSON.stringify({ error: { code: 403, message: 'Google Sheets API has not been used in project 1 before or it is disabled.', details: [{ reason: 'SERVICE_DISABLED' }] } }), { status: 403, headers: { 'content-type': 'application/json' } });
 
   test('bỏ lớp bọc và đọc bảng', async () => {
     assert.equal(parseGvizBody(okBody).table.rows[0].c[0].v, 'a);b');
@@ -1001,10 +1004,11 @@ describe('sheet.js – gviz', () => {
   test('service account: dùng Bearer token; lỗi token → thử lại không token (Sheet công khai)', async () => {
     const sa = { client_email: 'sa@dugiotih.iam.gserviceaccount.com', private_key: 'k' };
     const auths = [];
-    const fetchImpl = async (url, init) => { auths.push(init.headers.Authorization); return resp(okBody); };
+    const fetchImpl = async (url, init) => { if (isApi(url)) return apiDisabled(); auths.push(init.headers.Authorization); return resp(okBody); };
     const f1 = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, fetchImpl, getToken: async () => 'tok123' });
     await f1('1');
-    assert.deepEqual(auths, ['Bearer tok123']);
+    assert.deepEqual(auths, ['Bearer tok123'], 'Sheets API chưa bật → gviz bằng token');
+    assert.ok([...f1.warnings].some(w => /Sheets API chưa được bật/.test(w)));
     auths.length = 0;
     const f2 = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, fetchImpl, getToken: async () => { throw new Error('no token'); } });
     await f2('1');
@@ -1023,12 +1027,12 @@ describe('sheet.js – gviz', () => {
     const seen = [];
     const priv = makeSheetFetcher({
       sheetId: 'SID', serviceAccount: sa, getToken: async () => 'tok',
-      fetchImpl: async (url, init) => { seen.push([url, init.headers.Authorization]); return init.headers.Authorization ? resp(okBody) : resp('<html>login</html>', 200, 'text/html'); },
+      fetchImpl: async (url, init) => { if (isApi(url)) return apiDisabled(); seen.push([url, init.headers.Authorization]); return init.headers.Authorization ? resp(okBody) : resp('<html>login</html>', 200, 'text/html'); },
     });
     await priv('1');
     assert.equal(await priv.isPublic('1'), false);
     assert.deepEqual(seen[1], [gvizUrl('SID', '1', 'limit 0'), undefined], 'thăm dò không kèm token, chỉ lấy tiêu đề cột');
-    const pub = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, getToken: async () => 'tok', fetchImpl: async () => resp(okBody) });
+    const pub = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, getToken: async () => 'tok', fetchImpl: async url => (isApi(url) ? apiDisabled() : resp(okBody)) });
     assert.equal(await pub.isPublic('1'), true);
     const down = makeSheetFetcher({ sheetId: 'SID', serviceAccount: sa, getToken: async () => 'tok', fetchImpl: async () => { throw new TypeError('fetch failed'); } });
     assert.equal(await down.isPublic('1'), null);
@@ -1172,5 +1176,71 @@ describe('firestoreStore (Firestore giả lập)', () => {
     db.docs.set('config/syncLock', { until: 0, token: null });
     const r4 = await run(`user:gv@${DOMAIN}`);
     assert.equal(r4.skipped, 'recent');
+  });
+});
+
+/* =====================================================================
+ * Đọc bằng Google Sheets API (đủ dòng kể cả khi Sheet đang lọc) + chặn giảm phiếu bất thường
+ * ===================================================================== */
+describe('Sheets API + chặn giảm phiếu bất thường', () => {
+  const EPOCH = Date.UTC(1899, 11, 30);
+  const toValues = table => {
+    const U = [table.cols.map(c => c.label)], F = [table.cols.map(c => c.label)];
+    for (const row of table.rows) {
+      const u = [], f = [];
+      table.cols.forEach((col, i) => {
+        const c = row.c?.[i];
+        if (!c || c.v == null || c.v === '') { u.push(''); f.push(''); return; }
+        const m = typeof c.v === 'string' && c.v.match(/^Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+),(\d+))?\)$/);
+        if (m) { u.push((Date.UTC(+m[1], +m[2], +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)) - EPOCH) / 864e5); f.push(c.f ?? ''); return; }
+        u.push(c.v); f.push(c.f ?? String(c.v));
+      });
+      while (u.length && u[u.length - 1] === '') { u.pop(); f.pop(); }
+      U.push(u); F.push(f);
+    }
+    return { U, F };
+  };
+  const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
+  const api = (book, calls = []) => async (url, init) => {
+    calls.push({ url: String(url), auth: init?.headers?.Authorization });
+    const u = new URL(url);
+    if (u.host !== 'sheets.googleapis.com') throw new Error('không được gọi gviz');
+    const m = u.pathname.match(/^\/v4\/spreadsheets\/[^/]+(?:\/values\/(.+))?$/);
+    if (!m[1]) return json({ sheets: Object.keys(book).map(gid => ({ properties: { sheetId: Number(gid), title: `Tab ${gid}` } })) });
+    const gid = decodeURIComponent(m[1]).replace(/^'Tab |'$/g, '');
+    const { U, F } = book[gid];
+    return json({ values: u.searchParams.get('valueRenderOption') === 'FORMATTED_VALUE' ? F : U });
+  };
+
+  test('valuesToTable: cùng dữ liệu, kết quả phân tích giống hệt gviz (phiếu + DS Nhân sự)', () => {
+    const g = formTable(40), v = toValues(g);
+    assert.deepEqual(parseFormTable(valuesToTable(v.U, v.F)), parseFormTable(g));
+    const st = staffTable(), w = toValues(st);
+    assert.deepEqual(parseStaffTable(valuesToTable(w.U, w.F)), parseStaffTable(st));
+  });
+  test('fetchSheetsApiTable theo gid: tra tên tab rồi đọc ĐỦ dòng; gid lạ → SHEET_TAB_NOT_FOUND', async () => {
+    const book = { [FORM_GID]: toValues(formTable(647)) };
+    const calls = [];
+    const t = await fetchSheetsApiTable(SHEET_ID, FORM_GID, { accessToken: 'tok', fetchImpl: api(book, calls) });
+    assert.equal(parseFormTable(t).records.length, 647);
+    assert.ok(calls.every(c => c.auth === 'Bearer tok'));
+    await assert.rejects(fetchSheetsApiTable(SHEET_ID, '1', { accessToken: 'tok', fetchImpl: api(book) }), e => e.code === 'SHEET_TAB_NOT_FOUND');
+  });
+  test('có service account và API đã bật: đọc bằng Sheets API, không gọi gviz, không cảnh báo', async () => {
+    const book = { [FORM_GID]: toValues(formTable(5)) };
+    const f = makeSheetFetcher({ sheetId: SHEET_ID, serviceAccount: { client_email: 'sa@x.iam.gserviceaccount.com', private_key: 'k' }, fetchImpl: api(book), getToken: async () => 'tok' });
+    assert.equal((await f(FORM_GID)).rows.length, 5);
+    assert.equal(f.warnings.size, 0);
+  });
+  test('số phiếu giảm quá nửa (vd. Sheet đang lọc) → dừng đồng bộ, dữ liệu dashboard giữ nguyên; force chấp nhận', async () => {
+    const { store, src, sync, t } = setup({ n: 40 });
+    await sync();
+    src.form.rows = src.form.rows.slice(0, 10);
+    t.now += 120_000;
+    await assert.rejects(sync(), e => e.code === 'RECORD_DROP' && e.expose === true && /bộ lọc/.test(e.message));
+    assert.equal((await store.listIds(PATHS.phieu)).length, 40);
+    t.now += 120_000;
+    await sync({ force: true });
+    assert.equal((await store.listIds(PATHS.phieu)).length, 10);
   });
 });
