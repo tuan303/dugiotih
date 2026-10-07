@@ -11,8 +11,14 @@ const DEFAULT_TIMEOUT_MS = 25_000;
 
 const publicError = (message, code) => Object.assign(new Error(message), { expose: true, code });
 
-export const gvizUrl = (sheetId, gid, tq = '') =>
-  `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/gviz/tq?gid=${encodeURIComponent(gid)}&headers=1&tqx=out:json${tq ? `&tq=${encodeURIComponent(tq)}` : ''}`;
+// tab: { sheet: 'Tên tab' } (khuyên dùng – v2) | { gid: '123' } | '123' (gid – như v1).
+// ⚠ Với sheet=<tên>, nếu tab KHÔNG tồn tại Google trả về TAB ĐẦU TIÊN (không báo lỗi) → nơi gọi phải kiểm tra cấu trúc bảng.
+const tabParam = tab => (tab && typeof tab === 'object'
+  ? (tab.sheet != null ? `sheet=${encodeURIComponent(tab.sheet)}` : `gid=${encodeURIComponent(tab.gid ?? '')}`)
+  : `gid=${encodeURIComponent(tab ?? '')}`);
+export const tabLabel = tab => (tab && typeof tab === 'object' && tab.sheet != null ? `tab “${tab.sheet}”` : `gid ${tab && typeof tab === 'object' ? tab.gid : tab}`);
+export const gvizUrl = (sheetId, tab, tq = '') =>
+  `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/gviz/tq?${tabParam(tab)}&headers=1&tqx=out:json${tq ? `&tq=${encodeURIComponent(tq)}` : ''}`;
 const SHARE_HINT = 'Hãy chia sẻ quyền Xem của Sheet cho email service account (FIREBASE_SERVICE_ACCOUNT → client_email) – xem README, bước 2.';
 
 // "/*O_o*/\ngoogle.visualization.Query.setResponse({...});" → object
@@ -34,38 +40,39 @@ export function parseGvizBody(body) {
 }
 
 /**
- * Tải một tab của Sheet (theo gid) và trả về `table` của gviz.
+ * Tải một tab của Sheet và trả về `table` của gviz.
  * @param {string} sheetId
- * @param {string|number} gid
+ * @param {{sheet:string}|{gid:string}|string|number} tab  tên tab (v2) hoặc gid
  * @param {{accessToken?:string, fetchImpl?:typeof fetch, timeoutMs?:number, tq?:string}} [opts]  tq: câu truy vấn gviz (vd. 'limit 0')
  */
-export async function fetchGvizTable(sheetId, gid, { accessToken, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, tq = '' } = {}) {
-  if (!sheetId) throw publicError('Chưa cấu hình SHEET_ID.', 'CONFIG_SHEET_ID');
+export async function fetchGvizTable(sheetId, tab, { accessToken, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, tq = '' } = {}) {
+  if (!sheetId) throw publicError('Chưa cấu hình mã Google Sheet (SHEET_ID_…).', 'CONFIG_SHEET_ID');
+  const where = tabLabel(tab);
   const headers = { Accept: 'application/json, text/javascript, */*' };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   let res, body;
   try {
-    res = await fetchImpl(gvizUrl(sheetId, gid, tq), { headers, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    res = await fetchImpl(gvizUrl(sheetId, tab, tq), { headers, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
     body = await res.text();
   } catch (e) {
     const timeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-    throw publicError(timeout ? `Quá thời gian chờ khi tải Google Sheet (gid ${gid}).` : `Không kết nối được tới Google Sheet (gid ${gid}).`, 'SHEET_NETWORK');
+    throw publicError(timeout ? `Quá thời gian chờ khi tải Google Sheet (${where}).` : `Không kết nối được tới Google Sheet (${where}).`, 'SHEET_NETWORK');
   }
   const ctype = String(res.headers?.get?.('content-type') || '');
-  if (res.status === 404) throw publicError('Không tìm thấy Google Sheet – kiểm tra lại SHEET_ID.', 'SHEET_NOT_FOUND');
+  if (res.status === 404) throw publicError('Không tìm thấy Google Sheet – kiểm tra lại mã Sheet (SHEET_ID_…).', 'SHEET_NOT_FOUND');
   if (res.status === 401 || res.status === 403 || (/text\/html/i.test(ctype) && !/setResponse\(/.test(body))) {
-    throw publicError(`Không có quyền đọc Google Sheet (gid ${gid}). ${SHARE_HINT}`, 'SHEET_NOT_SHARED');
+    throw publicError(`Không có quyền đọc Google Sheet (${where}). ${SHARE_HINT}`, 'SHEET_NOT_SHARED');
   }
-  if (!res.ok) throw publicError(`Google Sheet trả về lỗi HTTP ${res.status} (gid ${gid}).`, 'SHEET_HTTP');
+  if (!res.ok) throw publicError(`Google Sheet trả về lỗi HTTP ${res.status} (${where}).`, 'SHEET_HTTP');
 
   const json = parseGvizBody(body);
   if (json.status === 'error') {
     const e0 = (json.errors || [])[0] || {};
     const detail = e0.detailed_message || e0.message || e0.reason || 'không rõ';
-    throw publicError(`Google Sheet báo lỗi (gid ${gid}): ${detail}`, 'SHEET_QUERY_ERROR');
+    throw publicError(`Google Sheet báo lỗi (${where}): ${detail}`, 'SHEET_QUERY_ERROR');
   }
   if (!json.table || !Array.isArray(json.table.cols) || !Array.isArray(json.table.rows)) {
-    throw publicError(`Phản hồi Google Sheet (gid ${gid}) không có bảng dữ liệu.`, 'SHEET_BAD_RESPONSE');
+    throw publicError(`Phản hồi Google Sheet (${where}) không có bảng dữ liệu.`, 'SHEET_BAD_RESPONSE');
   }
   return json.table;
 }
@@ -73,7 +80,8 @@ export async function fetchGvizTable(sheetId, gid, { accessToken, fetchImpl = gl
 /* ---------------- Google Sheets API v4 (luôn đọc ĐỦ dữ liệu) ----------------
  * gviz chỉ trả các dòng ĐANG HIỂN THỊ: khi ai đó bật bộ lọc trên Sheet, các dòng bị lọc ẩn sẽ biến mất khỏi kết quả.
  * Sheets API trả toàn bộ giá trị bất kể bộ lọc → dùng khi có service account. Cần bật "Google Sheets API" cho dự án
- * Google Cloud của Firebase. Kết quả được chuyển về đúng định dạng `table` của gviz cho lib/shared.js. */
+ * Google Cloud của Firebase (https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=<project_id>).
+ * Kết quả được chuyển về đúng định dạng `table` của gviz để bộ phân tích (lib/shared.js) dùng chung. */
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const a1Sheet = title => `'${String(title).replace(/'/g, "''")}'`;
 export const sheetsValuesUrl = (sheetId, title, render) =>
@@ -101,8 +109,8 @@ async function sheetsApiGet(url, { accessToken, fetchImpl, timeoutMs, where }) {
     throw publicError('Google Sheets API chưa được bật cho dự án Google Cloud của Firebase.', 'SHEETS_API_DISABLED');
   }
   if (res.status === 401 || res.status === 403) throw publicError(`Không có quyền đọc Google Sheet (${where}). ${SHARE_HINT}`, 'SHEET_NOT_SHARED');
-  if (res.status === 404) throw publicError('Không tìm thấy Google Sheet – kiểm tra lại mã Sheet (SHEET_ID).', 'SHEET_NOT_FOUND');
-  if (res.status === 400 && /unable to parse range/i.test(msg)) throw publicError(`Không tìm thấy ${where} trong Google Sheet.`, 'SHEET_TAB_NOT_FOUND');
+  if (res.status === 404) throw publicError('Không tìm thấy Google Sheet – kiểm tra lại mã Sheet (SHEET_ID_…).', 'SHEET_NOT_FOUND');
+  if (res.status === 400 && /unable to parse range/i.test(msg)) throw publicError(`Không tìm thấy ${where} trong Google Sheet – kiểm tra tên tab.`, 'SHEET_TAB_NOT_FOUND');
   throw publicError(`Google Sheets API trả về lỗi HTTP ${res.status} (${where}).`, 'SHEET_HTTP');
 }
 
@@ -115,7 +123,12 @@ const DATE_TEXT = /^\s*\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}/;
 const colId = i => { let s = ''; for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; };
 const isBlank = v => v === undefined || v === null || v === '';
 
-/** values.get (UNFORMATTED_VALUE + FORMATTED_VALUE, dòng 1 là tiêu đề) → `table` dạng gviz (cột có kiểu suy theo đa số). */
+/**
+ * Chuyển kết quả values.get (2 lần: UNFORMATTED_VALUE + FORMATTED_VALUE, dòng 1 là tiêu đề) thành `table` dạng gviz:
+ * cột có kiểu (number | date | datetime | string) suy theo đa số giá trị; ô ngày giờ có v = 'Date(…)' và f = chuỗi hiển thị.
+ * @param {any[][]} U  giá trị gốc (số, số ngày, chuỗi, boolean)
+ * @param {any[][]} F  giá trị hiển thị (chuỗi)
+ */
 export function valuesToTable(U = [], F = []) {
   const header = (F[0] || U[0] || []).map(v => (isBlank(v) ? '' : String(v)));
   const nRows = Math.max(U.length, F.length) - 1;
@@ -146,15 +159,23 @@ export function valuesToTable(U = [], F = []) {
   return { cols, rows, parsedNumHeaders: 1 };
 }
 
-/** Đọc tab (theo gid) bằng Google Sheets API – cần access token của service account đã được chia sẻ quyền Xem. */
-export async function fetchSheetsApiTable(sheetId, gid, { accessToken, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  if (!sheetId) throw publicError('Chưa cấu hình SHEET_ID trên Vercel.', 'CONFIG_SHEET_ID');
-  const where = `gid ${gid}`;
+/**
+ * Đọc một tab bằng Google Sheets API (cần access token của service account đã được chia sẻ quyền Xem).
+ * @param {string} sheetId
+ * @param {{sheet:string}|{gid:string}|string|number} tab
+ */
+export async function fetchSheetsApiTable(sheetId, tab, { accessToken, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!sheetId) throw publicError('Chưa cấu hình mã Google Sheet (SHEET_ID_…).', 'CONFIG_SHEET_ID');
+  const where = tabLabel(tab);
   const opts = { accessToken, fetchImpl, timeoutMs, where };
-  const meta = await sheetsApiGet(sheetsMetaUrl(sheetId), opts);
-  const s = (meta.sheets || []).find(x => String(x?.properties?.sheetId) === String(gid));
-  if (!s) throw publicError(`Không tìm thấy tab ${where} trong Google Sheet – kiểm tra SHEET_GID_FORM / SHEET_GID_STAFF.`, 'SHEET_TAB_NOT_FOUND');
-  const title = s.properties.title;
+  let title = tab && typeof tab === 'object' && tab.sheet != null ? String(tab.sheet) : null;
+  if (title == null) {
+    const gid = String(tab && typeof tab === 'object' ? tab.gid : tab);
+    const meta = await sheetsApiGet(sheetsMetaUrl(sheetId), opts);
+    const s = (meta.sheets || []).find(x => String(x?.properties?.sheetId) === gid);
+    if (!s) throw publicError(`Không tìm thấy ${where} trong Google Sheet.`, 'SHEET_TAB_NOT_FOUND');
+    title = s.properties.title;
+  }
   const [unf, fmt] = await Promise.all([
     sheetsApiGet(sheetsValuesUrl(sheetId, title, 'UNFORMATTED_VALUE'), opts),
     sheetsApiGet(sheetsValuesUrl(sheetId, title, 'FORMATTED_VALUE'), opts),
@@ -186,61 +207,61 @@ export async function getSheetsAccessToken(serviceAccount) {
 }
 
 /**
- * Tạo hàm fetchTable(gid) cho runSync: thử bằng token service account trước (Sheet riêng tư),
+ * Tạo hàm fetchTable(tab) cho MỘT Sheet: thử bằng token service account trước (Sheet riêng tư),
  * nếu không được thì thử lại không token (Sheet công khai). Ghi nhớ cách đã thành công cho các tab sau.
- * fetchTable.isPublic(gid) → true (đọc được KHÔNG cần đăng nhập) | false (riêng tư) | null (không rõ):
+ * fetchTable.isPublic(tab) → true (đọc được KHÔNG cần đăng nhập) | false (riêng tư) | null (không rõ):
  *   runSync dùng để chỉ đưa đường dẫn Sheet lên dashboard khi Sheet đã riêng tư, và cảnh báo khi Sheet còn công khai.
  * @param {{sheetId:string, serviceAccount?:{client_email:string, private_key:string}|null, fetchImpl?:typeof fetch, getToken?:Function}} p
  */
-export function makeSheetFetcher({ sheetId, serviceAccount = null, fetchImpl = globalThis.fetch, getToken = getSheetsAccessToken } = {}) {
+export function makeSheetFetcher({ sheetId, serviceAccount = null, fetchImpl = globalThis.fetch, getToken = getSheetsAccessToken, apiState = { disabled: false }, warnings = new Set() } = {}) {
   let mode = null; // 'token' | 'anon'
   let tokenPromise = null;
-  let apiDisabled = false;
-  const warnings = new Set();
-  fetchTable.warnings = warnings; // cảnh báo về cách đọc (Sheets API chưa bật, đọc công khai…)
-  fetchTable.isPublic = async gid => {
+  const filterRisk = how => `Sheet ${sheetId.slice(0, 6)}…: đang đọc qua gviz (${how}) – nếu Sheet đang bật BỘ LỌC, các dòng bị ẩn sẽ KHÔNG được đồng bộ.`;
+  fetchTable.warnings = warnings;
+  fetchTable.isPublic = async tab => {
     // Không có service account → máy chủ chỉ đọc được khi Sheet công khai (nếu không, fetchTable sẽ báo lỗi).
     if (!serviceAccount || mode === 'anon') return true;
     try {
-      await fetchGvizTable(sheetId, gid, { fetchImpl, tq: 'limit 0', timeoutMs: 10_000 }); // chỉ lấy tiêu đề cột, không token
+      await fetchGvizTable(sheetId, tab, { fetchImpl, tq: 'limit 0', timeoutMs: 10_000 }); // chỉ lấy tiêu đề cột, không token
       return true;
     } catch (e) {
       return e?.code === 'SHEET_NOT_SHARED' ? false : null;
     }
   };
   return fetchTable;
-  async function fetchTable(gid) {
+  async function fetchTable(tab) {
     let tokenErr = null;
     if (serviceAccount && mode !== 'anon') {
       try {
         tokenPromise ||= getToken(serviceAccount);
         const accessToken = await tokenPromise;
         // 1) Sheets API – đủ mọi dòng kể cả khi Sheet đang lọc.
-        if (!apiDisabled) {
+        if (!apiState.disabled) {
           try {
-            const table = await fetchSheetsApiTable(sheetId, gid, { accessToken, fetchImpl });
+            const table = await fetchSheetsApiTable(sheetId, tab, { accessToken, fetchImpl });
             mode = 'token';
             return table;
           } catch (e) {
             if (e?.code !== 'SHEETS_API_DISABLED') throw e;
-            apiDisabled = true;
-            warnings.add(`Google Sheets API chưa được bật cho dự án Firebase – đang đọc tạm qua gviz: nếu Sheet đang bật BỘ LỌC, các dòng bị ẩn sẽ KHÔNG được đồng bộ. Bật tại ${sheetsApiEnableUrl(serviceAccount.project_id)} rồi bấm Làm mới.`);
+            apiState.disabled = true;
+            warnings.add(`Google Sheets API chưa được bật cho dự án Firebase – đang đọc tạm qua gviz: nếu Sheet đang bật BỘ LỌC, các dòng bị ẩn sẽ KHÔNG được đồng bộ. Bật tại ${sheetsApiEnableUrl(serviceAccount.project_id)} rồi bấm Đồng bộ lại.`);
           }
         }
         // 2) Sheets API chưa bật → gviz bằng token (chỉ thấy các dòng đang hiển thị).
-        const table = await fetchGvizTable(sheetId, gid, { accessToken, fetchImpl });
+        const table = await fetchGvizTable(sheetId, tab, { accessToken, fetchImpl });
         mode = 'token';
         return table;
       } catch (e) {
         tokenPromise = null;
+        // Mã Sheet / tên tab sai: không thử đọc công khai (gviz sẽ lặng lẽ trả về tab đầu tiên).
         if (mode === 'token' || e?.code === 'SHEET_NOT_FOUND' || e?.code === 'SHEET_TAB_NOT_FOUND') throw e;
         tokenErr = e;
       }
     }
     try {
-      const table = await fetchGvizTable(sheetId, gid, { fetchImpl });
+      const table = await fetchGvizTable(sheetId, tab, { fetchImpl });
       mode = 'anon';
-      if (serviceAccount) warnings.add('Đang đọc Sheet công khai qua gviz (service account chưa đọc được) – nếu Sheet đang bật BỘ LỌC, các dòng bị ẩn sẽ KHÔNG được đồng bộ.');
+      if (serviceAccount) warnings.add(filterRisk('Sheet công khai, service account chưa đọc được'));
       return table;
     } catch (e) {
       if (tokenErr && e.code === 'SHEET_NOT_SHARED') {
@@ -250,4 +271,27 @@ export function makeSheetFetcher({ sheetId, serviceAccount = null, fetchImpl = g
       throw e;
     }
   }
+}
+
+/**
+ * fetchTable(sheetId, tab) cho NHIỀU Sheet (v2: mỗi cấp một Sheet + Sheet phân quyền). Dùng chung một token service account;
+ * mỗi Sheet tự nhớ cách đọc đã thành công (token hoặc công khai).
+ * fetchTable.isPublic(sheetId, tab) → true | false | null (như makeSheetFetcher).
+ * @param {{serviceAccount?:{client_email:string, private_key:string}|null, fetchImpl?:typeof fetch, getToken?:Function}} [p]
+ */
+export function makeMultiSheetFetcher({ serviceAccount = null, fetchImpl = globalThis.fetch, getToken = getSheetsAccessToken } = {}) {
+  let tokenP = null;
+  const sharedToken = sa => (tokenP ||= Promise.resolve().then(() => getToken(sa)).catch(e => { tokenP = null; throw e; }));
+  const apiState = { disabled: false }; // Sheets API bật/tắt là thiết lập của cả dự án → dùng chung
+  const warnings = new Set();
+  const bySheet = new Map();
+  const of = sheetId => {
+    let f = bySheet.get(sheetId);
+    if (!f) bySheet.set(sheetId, f = makeSheetFetcher({ sheetId, serviceAccount, fetchImpl, getToken: sharedToken, apiState, warnings }));
+    return f;
+  };
+  const fetchTable = (sheetId, tab) => of(sheetId)(tab);
+  fetchTable.isPublic = (sheetId, tab) => of(sheetId).isPublic(tab);
+  fetchTable.warnings = warnings; // Set<string> – cảnh báo về cách đọc (Sheets API chưa bật, đọc công khai…)
+  return fetchTable;
 }

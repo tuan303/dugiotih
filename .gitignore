@@ -10,8 +10,10 @@ node_modules
 # Vercel CLI
 .vercel
 
-# Dữ liệu xem trước cục bộ (chứa dữ liệu phiếu thật) – không đưa lên repo công khai
+# Dữ liệu xem trước cục bộ (chứa dữ liệu phiếu thật, email, mã nhân sự) – không đưa lên repo công khai
+# dev-data.json: bản v1 (Tiểu học);  dev-data-v2.json: bản v2 toàn trường (npm run dry-run trên nhánh toan-truong)
 dev-data.json
+dev-data-v2.json
 
 # Dashboard cũ dạng tệp đơn (có nhúng Sheet ID) – không đưa lên repo công khai
 dashboard-du-gio.html

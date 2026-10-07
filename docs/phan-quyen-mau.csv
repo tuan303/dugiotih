@@ -1,0 +1,6 @@
+Email,Vai trò,Cấp,Tổ,Ghi chú
+bgh.lienCap@hoangmaistarschool.edu.vn,BGH liên cấp,,,"Ví dụ: Phó Tổng hiệu trưởng – xem cả 3 cấp và trang Toàn trường (bỏ trống Cấp, Tổ)"
+bgh.thcs@hoangmaistarschool.edu.vn,BGH cấp,THCS,,Ví dụ: Phó hiệu trưởng THCS – chỉ xem dashboard THCS
+totruong.toan.thcs@hoangmaistarschool.edu.vn,Tổ trưởng,THCS,Tổ Toán,Ví dụ: Tổ trưởng tổ Toán THCS – tên tổ ghi đúng như trên dashboard
+totruong.nangkhieu@hoangmaistarschool.edu.vn,Tổ trưởng,"Tiểu học, THCS",Tổ Năng khiếu,Ví dụ: phụ trách tổ Năng khiếu ở hai cấp – nhiều cấp cách nhau bằng dấu phẩy
+da.nghi.viec@hoangmaistarschool.edu.vn,Không truy cập,,,"Ví dụ: đã nghỉ việc – thu hồi MỌI quyền của email này, kể cả quyền tự động từ DS Nhân sự"

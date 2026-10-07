@@ -5,6 +5,26 @@
       "collectionGroup": "dashboard_chunks",
       "fieldPath": "data",
       "indexes": []
+    },
+    {
+      "collectionGroup": "chunks",
+      "fieldPath": "data",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "v2_scopes",
+      "fieldPath": "crit",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "v2_scopes",
+      "fieldPath": "staff",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "v2_scopes",
+      "fieldPath": "benchmarks",
+      "indexes": []
     }
   ]
 }

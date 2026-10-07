@@ -57,7 +57,7 @@ export function getServiceAccount(env = process.env) {
 
 // Chỉ liệt kê TÊN biến cấu hình (không bao giờ giá trị) để chẩn đoán: thiếu biến, sai tên, sai môi trường, chưa Redeploy.
 export function configNamesHint(env = process.env) {
-  const names = Object.keys(env).filter(k => /firebase|sheet|secret|allowed|access_from/i.test(k)).sort();
+  const names = Object.keys(env).filter(k => /firebase|sheet|secret|allowed|access_from|admin|roles/i.test(k)).sort();
   const where = env.VERCEL_ENV ? `môi trường Vercel: ${env.VERCEL_ENV}` : 'không chạy trên Vercel';
   return `${where}; biến cấu hình đang thấy: ${names.length ? names.join(', ') : '(không có)'}`;
 }
