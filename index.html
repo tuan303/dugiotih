@@ -45,6 +45,7 @@
      lightness/CVD trên nền sáng/tối, cùng sắc độ với màu thương hiệu). */
   --b-tih:#ffad00; --b-thcs:#2da037; --b-thpt:#23328C;
   --c-tih:#EC9F07; --c-thcs:#24922D; --c-thpt:#384DB8;
+  --c-all:#D21235; /* Toàn trường */
   /* Nhấn theo cấp đang xem (mặc định = nhận diện chung của trường): thanh nhấn header, gạch chân tab, nút đang chọn,
      chữ nhấn (luôn ≥ 4,5:1 trên nền sáng). */
   --acc-bar:var(--brand); --acc-fill:var(--navy); --acc-on:#FFFFFF; --acc-ink:var(--brand); --link:var(--series);
@@ -62,7 +63,7 @@
     --series:#6576E6; --series-soft:rgba(101,118,230,.14); --link:#8391F0;
     --lv-tot:#3CA694; --lv-kha:#126F96; --lv-dat:#D852D0; --lv-chua:#CE3459;
     --lv-tot-on:#0C0F1D; --lv-kha-on:#FFFFFF; --lv-dat-on:#0C0F1D; --lv-chua-on:#FFFFFF; --lv-tot-ink:#58C3B6;
-    --c-tih:#C68405; --c-thcs:#0B7A1B; --c-thpt:#6582F2; --b-thpt:#5E74E0;
+    --c-tih:#C68405; --c-thcs:#0B7A1B; --c-thpt:#6582F2; --b-thpt:#5E74E0; --c-all:#E8334F;
     --acc-on:#0C0F1D;
     --up:#3CC27A; --down:#F06A7E; --warn-bg:#2A2414; --crit-bg:#2C1720;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25);
@@ -77,7 +78,7 @@
   --series:#6576E6; --series-soft:rgba(101,118,230,.14); --link:#8391F0;
   --lv-tot:#3CA694; --lv-kha:#126F96; --lv-dat:#D852D0; --lv-chua:#CE3459;
   --lv-tot-on:#0C0F1D; --lv-kha-on:#FFFFFF; --lv-dat-on:#0C0F1D; --lv-chua-on:#FFFFFF; --lv-tot-ink:#58C3B6;
-  --c-tih:#C68405; --c-thcs:#0B7A1B; --c-thpt:#6582F2; --b-thpt:#5E74E0;
+  --c-tih:#C68405; --c-thcs:#0B7A1B; --c-thpt:#6582F2; --b-thpt:#5E74E0; --c-all:#E8334F;
   --acc-on:#0C0F1D;
   --up:#3CC27A; --down:#F06A7E; --warn-bg:#2A2414; --crit-bg:#2C1720;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25);
@@ -2477,7 +2478,7 @@ function renderSchool(c) {
     if (l.state !== 'ready') return `<div class="cov-row"><div class="tt">${capDot(l.cap)}${esc(l.label)}</div><div class="ts">${l.state === 'disabled' ? 'Chưa kết nối dữ liệu' : 'Chưa có dữ liệu'}</div><div></div></div>`;
     if (!l.cov.total) return `<div class="cov-row"><div class="tt">${capDot(l.cap)}${esc(l.label)}</div><div class="ts">Chưa đọc được DS nhân sự</div><div class="vv">${nf0.format(l.nT)} GV</div></div>`;
     return `<div class="cov-row" data-goview="L_${l.cap}" data-gotab="coverage" style="cursor:pointer" data-tip="${esc(`<b>${esc(l.label)}</b><br>Đã dự: ${l.cov.done} GV · Chưa dự: ${l.cov.total - l.cov.done} GV<br><span class='tm'>Bấm để xem chi tiết theo tổ</span>`)}"><div class="tt">${capDot(l.cap)}${esc(l.label)}</div><div class="track"><div class="fill" style="width:${pctN(l.cov.done, l.cov.total)}%;background:var(--c-${l.cap})"></div></div><div class="vv"><b>${pct(l.cov.done, l.cov.total)}</b> · ${l.cov.done}/${l.cov.total}</div></div>`;
-  }).join('') + (covT ? `<div class="cov-row" style="border-top:1px solid var(--line)"><div class="tn" title="Mỗi giáo viên chỉ tính một lần dù có tên trong DS nhân sự của nhiều cấp">Toàn trường</div><div class="track"><div class="fill" style="width:${pctN(covD, covT)}%;background:var(--ink-2)"></div></div><div class="vv"><b>${pct(covD, covT)}</b> · ${covD}/${covT}</div></div>` : '');
+  }).join('') + (covT ? `<div class="cov-row" style="border-top:1px solid var(--line)"><div class="tn" title="Mỗi giáo viên chỉ tính một lần dù có tên trong DS nhân sự của nhiều cấp">Toàn trường</div><div class="track"><div class="fill" style="width:${pctN(covD, covT)}%;background:var(--c-all)"></div></div><div class="vv"><b>${pct(covD, covT)}</b> · ${covD}/${covT}</div></div>` : '');
   const missTxt = live.filter(l => l.cov.total).map(l => `${esc(l.label)}: <b>${nf0.format(l.cov.total - l.cov.done)}</b>`).join(' · ');
 
   // BGH theo cấp
