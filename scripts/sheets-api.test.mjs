@@ -313,3 +313,37 @@ describe('runSync – thiếu SHEET_ID của một cấp đã có dữ liệu (v
     assert.equal(await store.get('v2_scopes/L_thcs'), null, 'force: gỡ hẳn cấp không còn cấu hình');
   });
 });
+
+describe('runSync – một hạn chót cho cả lượt gọi (không cấp thêm thời gian cho vòng chạy lại)', () => {
+  async function scenario(msPerBatch) {
+    let now = T0;
+    const store = memoryStore({ clock: () => now });
+    const src = makeSource({ tihN: 120, thcsN: 60 });
+    await runSync({ store, fetchTable: src.fetchTable, env: BASE_ENV, trigger: 'cron', nowMs: () => now, log: silentLog });
+    src.tables[SHEET_TIH][FORM_TAB].rows.push(...makeSource({ tihN: 125 }).tables[SHEET_TIH][FORM_TAB].rows.slice(120)); // 5 phiếu mới
+    now += 120_000;
+    const orig = store.commitBatch.bind(store);
+    let interrupted = false;
+    store.commitBatch = async b => {
+      now += msPerBatch;
+      if (!interrupted) { // một lượt gọi khác chen vào khi đang ghi → bị khóa, đặt cờ “có người chờ”
+        interrupted = true;
+        const r2 = await runSync({ store, fetchTable: src.fetchTable, env: BASE_ENV, trigger: 'webhook', nowMs: () => now, log: silentLog });
+        assert.equal(r2.skipped, 'locked');
+      }
+      return orig(b);
+    };
+    const start = now;
+    const r = await runSync({ store, fetchTable: src.fetchTable, env: BASE_ENV, trigger: 'cron', nowMs: () => now, log: silentLog });
+    return { r, elapsed: now - start };
+  }
+  test('còn nhiều thời gian → chạy thêm một vòng cho lượt bị khóa', async () => {
+    const { r } = await scenario(500);
+    assert.equal(r.runs, 2);
+  });
+  test('còn ít thời gian → KHÔNG chạy thêm vòng (tránh vượt 60 s của Vercel)', async () => {
+    const { r, elapsed } = await scenario(6_000);
+    assert.equal(r.runs, 1);
+    assert.ok(elapsed < 45_000, `tổng ${elapsed} ms`);
+  });
+});

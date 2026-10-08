@@ -1656,7 +1656,7 @@ async function callSyncOnce() {
     try { body = await res.json(); } catch {}
     if (!body || typeof body !== 'object') {
       body = { ok: false, error: res.status === 404 ? 'Không tìm thấy hàm /api/sync trên máy chủ (kiểm tra bản triển khai Vercel).'
-        : res.status === 504 ? 'Máy chủ xử lý quá thời gian cho phép. Vui lòng thử lại sau khoảng 1 phút.'
+        : res.status === 504 ? 'Lượt đồng bộ này chạy quá giới hạn thời gian của máy chủ. Dữ liệu trên dashboard vẫn an toàn và sẽ được cập nhật ở lượt đồng bộ sau (có thể bấm Làm mới lại sau khoảng 1 phút).'
         : `Máy chủ đồng bộ trả về lỗi HTTP ${res.status}.` };
     }
     body.status = res.status;

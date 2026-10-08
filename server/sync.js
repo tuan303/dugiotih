@@ -40,13 +40,14 @@ export const MAX_BATCH_OPS = 500;
 // Ghi song song tối đa ngần này lô; dừng nhận lô mới sau SYNC_BUDGET_MS (lưu tiến độ, lượt sau ghi tiếp) để luôn xong
 // trước giới hạn 60 s của Vercel và trước khi khóa (LOCK_TTL_MS) hết hạn.
 export const COMMIT_CONCURRENCY = 4;
-export const SYNC_BUDGET_MS = 40_000;
+export const budgetOf = env => (Number(env?.SYNC_BUDGET_MS) > 0 ? Number(env.SYNC_BUDGET_MS) : SYNC_BUDGET_MS);
+export const SYNC_BUDGET_MS = 30_000; // tính từ lúc BẮT ĐẦU lượt gọi (gồm cả đọc Sheet và các vòng chạy lại)
 export const DROP_GUARD_MIN = 20;      // chặn giảm bất thường: chỉ áp dụng khi lần trước có ít nhất ngần này phiếu
 export const DROP_GUARD_RATIO = 0.5;   // số phiếu mới < 50% lần trước → giữ dữ liệu cũ + cảnh báo
 // Firestore giới hạn mỗi yêu cầu ghi ~10 MiB (REST còn mã hóa lại chuỗi JSON của khối) → mỗi lô ≤ 6 MiB (ước lượng theo JSON).
-export const MAX_BATCH_BYTES = 6 * 1024 * 1024;
+export const MAX_BATCH_BYTES = 2.5 * 1024 * 1024; // lô nhỏ → lô đang dở khi hết giờ kết thúc nhanh (Firestore cho tối đa 10 MiB)
 export { CHUNK_OPTS };
-const RERUN_BUDGET_MS = 25_000; // chỉ chạy lại (do có yêu cầu chờ) khi tổng thời gian còn dưới mức này
+const RERUN_MIN_LEFT_MS = 20_000; // chỉ chạy lại (do có yêu cầu chờ) khi còn ít nhất ngần này trước hạn chót của lượt gọi
 const MAX_RERUNS = 2;
 
 const publicError = (message, code = 'SYNC_ERROR') => Object.assign(new Error(message), { expose: true, code });
@@ -205,7 +206,7 @@ async function levelChanges(store, s, prevCh) {
 }
 
 /* ---------------- Một lượt đồng bộ (đã giữ khóa) ---------------- */
-async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log }) {
+async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log, deadline: callDeadline }) {
   const startMs = clock();
   const warnings = [];
   const logRaw = (what, e) => { if (e && !e.expose) log?.warn?.(`[sync] ${what}:`, e); };
@@ -430,8 +431,8 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
   //    Lỗi giữa chừng: trạng thái cũ được giữ nên lần sau ghi lại đúng phần còn thiếu (các thao tác đều idempotent).
   const tWrite = clock();
   let batches = 0, partial = false;
-  const budgetMs = Number(env?.SYNC_BUDGET_MS) > 0 ? Number(env.SYNC_BUDGET_MS) : SYNC_BUDGET_MS;
-  const deadline = startMs + budgetMs;
+  // Hạn chót chung của cả lượt gọi (runSync truyền vào) – không cấp thêm thời gian cho mỗi vòng chạy lại.
+  const deadline = Number.isFinite(callDeadline) ? callDeadline : startMs + budgetOf(env);
   const maxOps = Number(env?.SYNC_BATCH_OPS) > 0 ? Math.min(Number(env.SYNC_BATCH_OPS), WRITE_BATCH) : WRITE_BATCH; // nhỏ hơn chỉ để kiểm thử
   const done = {};
   for (const [name, groups] of [['accessFirst', accessFirst], ['scopes', scopeGroups], ['accessAfter', accessAfter], ['stale', staleScopeGroups]]) {
@@ -604,6 +605,7 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
     }
   }
 
+  const callDeadline = startMs + budgetOf(env);
   const token = await store.acquireLock(startMs, LOCK_TTL_MS);
   if (!token) return { ok: false, skipped: 'locked', ...empty, durationMs: clock() - startMs, syncedAtMs: null, trigger };
 
@@ -611,9 +613,9 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
   let released = false;
   try {
     for (;;) {
-      const r = await syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log });
+      const r = await syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log, deadline: callDeadline });
       total = mergeResults(total, r);
-      const canRerun = !r.partial && total.runs <= MAX_RERUNS && clock() - startMs < RERUN_BUDGET_MS;
+      const canRerun = !r.partial && total.runs <= MAX_RERUNS && clock() < callDeadline - RERUN_MIN_LEFT_MS;
       const again = await store.releaseLock(token, { nowMs: clock(), ttlMs: LOCK_TTL_MS, rerun: canRerun });
       if (!again) { released = true; break; }
     }

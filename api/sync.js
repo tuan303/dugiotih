@@ -39,6 +39,7 @@ const PUBLIC_FIELDS = [
   'ok', 'skipped', 'count', 'added', 'updated', 'removed', 'levels', 'scopes', 'scopesWritten', 'scopesDeleted', 'chunksWritten', 'chunksDeleted',
   'accessCount', 'accessWritten', 'accessDeleted', 'durationMs', 'syncedAtMs', 'trigger', 'runs', 'retryAfterMs',
   'partial', 'pending', // lượt đồng bộ lớn đã ghi một phần (trạng thái đã lưu) – trình duyệt gọi tiếp để ghi phần còn lại
+  'timing',             // thời gian từng giai đoạn (đọc Sheet / xử lý / ghi) – để chẩn đoán khi đồng bộ chậm
 ];
 // Tài khoản cùng tên miền nhưng CHƯA được cấp quyền xem (không có v2_access): chỉ biết lượt đồng bộ chạy hay chưa.
 const MINIMAL_FIELDS = ['ok', 'skipped', 'durationMs', 'syncedAtMs', 'retryAfterMs', 'partial'];
@@ -142,6 +143,8 @@ export function createHandler(deps = {}) {
         force,
         log,
       });
+      if (result.debug) result.timing = { fetchMs: result.debug.fetchMs, parseMs: result.debug.parseMs, writeMs: result.debug.writeMs, batches: result.debug.batches };
+      log.info?.(`[sync] ${auth.trigger}: ${result.partial ? 'dở dang' : result.skipped || 'xong'} trong ${result.durationMs} ms`, result.timing || '');
       if (result.warnings?.length) log.warn('[sync] cảnh báo:', result.warnings.join(' | '));
       const status = result.skipped === 'locked' ? 409 : (result.ok === false && result.skipped === 'recent') ? 429 : 200;
       const minimal = !!auth.email && !auth.admin && !auth.viewer;

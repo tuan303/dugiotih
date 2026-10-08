@@ -582,7 +582,7 @@ describe('readSyncConfig / packGroups', () => {
     assert.ok(b.every(x => x.reduce((n, o) => n + opBytes(o), 0) <= 900_000));
     const small = packGroups([[big(0)], [big(1)], [big(2)]], 400, 900_000);
     assert.deepEqual(small.map(x => x.length), [2, 1], 'nhóm nhỏ: không tách, gộp đến khi đầy theo dung lượng');
-    assert.equal(MAX_BATCH_BYTES, 6 * 1024 * 1024);
+    assert.equal(MAX_BATCH_BYTES, 2.5 * 1024 * 1024);
   });
 });
 
