@@ -178,7 +178,7 @@ Dùng để **bổ sung** quyền mà “DS Nhân sự” không thể hiện đ
   khác bấm đồng bộ chỉ nhận số lượng cảnh báo (`warningCount`).
 - `ADMIN_EMAILS` (biến môi trường trên Vercel) = danh sách email được coi là **BGH liên cấp** – dùng cho người quản
   trị (vd. cán bộ CNTT) và để có quyền ngay từ lần đồng bộ đầu tiên.
-- Thay đổi có hiệu lực sau **lượt đồng bộ kế tiếp** (≤ 15 phút với Apps Script, hoặc bấm đồng bộ trên dashboard).
+- Thay đổi có hiệu lực sau **lượt kiểm tra kế tiếp** (≤ 15 phút với Apps Script, hoặc bấm “Làm mới” trên dashboard).
   Khi quyền bị thu hồi, Security Rules từ chối các lượt đọc mới của người đó (dữ liệu đã tải trong tab đang mở chỉ
   mất khi tải lại trang).
 
@@ -283,7 +283,7 @@ toàn:
   trang “Phân quyền” chưa từng đọc được lần nào → **dừng** để không cấp nhầm quyền đã bị thu hồi.
 - Lượt đồng bộ tính ra 0 tài khoản có quyền trong khi trước đó có → dừng, tránh thu hồi nhầm hàng loạt.
 - `?force=1` (chỉ với `CRON_SECRET`) bỏ qua mã băm, giới hạn tần suất và hai chốt “0 phiếu” / “0 tài khoản” (ghi lại
-  toàn bộ ≈ 650 tài liệu – chỉ dùng khi thật cần; quy tắc công bố số liệu đối sánh vẫn giữ nguyên).
+  toàn bộ ≈ 1.200 tài liệu với dữ liệu 10/2026 – chỉ dùng khi thật cần; quy tắc công bố số liệu đối sánh vẫn giữ nguyên).
 
 Chi phí đọc: mở dashboard ≈ 1 (`v2_access`) + 1 (`v2_meta/global`) + số phạm vi + số khối dữ liệu, cộng 1 lượt đọc
 `v2_access` mỗi lần Security Rules kiểm tra một phạm vi – vẫn rất nhỏ so với hạn mức miễn phí 50.000 lượt đọc/ngày.
@@ -453,9 +453,10 @@ Với **mỗi** Sheet:
 - [ ] Chạy **`syncNow`** → xem *Nhật ký thực thi*: mỗi dòng ghi kèm tên Sheet và tóm tắt kết quả đồng bộ.
       **`setup`** in hướng dẫn và trạng thái; **`removeTriggers`** tạm dừng đồng bộ tự động của Sheet đó.
 
-Vì mỗi lượt đã đồng bộ cả trường, có thể giảm số lượt gọi bằng cách giữ trigger định kỳ trên **một** Sheet và đặt
-`SCHEDULE_MINUTES=0` trên các Sheet còn lại (trigger “Khi gửi biểu mẫu” vẫn chạy ở mọi Sheet). Để mặc định 15 phút ở
-cả ba Sheet cũng không sao: máy chủ chỉ ghi phần thay đổi, lượt trùng nhau được xếp hàng (409 → script tự thử lại).
+Vì mỗi lượt đã kiểm tra cả trường, nên giữ trigger định kỳ trên **một** Sheet và đặt `SCHEDULE_MINUTES=0` trên các
+Sheet còn lại (trigger “Khi gửi biểu mẫu” vẫn chạy ở mọi Sheet). Để mặc định 15 phút ở cả ba Sheet cũng không tốn
+Firestore: lượt định kỳ khi Sheet **không đổi** chỉ đọc 2 tài liệu và **không ghi gì** (xem *Chi phí*); chỉ tốn thêm
+lượt gọi Vercel và Google Sheets API.
 
 ### Thử nghiệm trên Vercel Preview
 
@@ -586,13 +587,13 @@ Khi BGH đã duyệt bản Preview:
 Google Form ─► Google Sheet (dữ liệu gốc: trang “Câu trả lời biểu mẫu” + trang “DS Nhân sự”)
                    │
                    │  Ba nguồn kích hoạt đồng bộ:
-                   │   ① Apps Script gắn với Sheet: ngay khi có phiếu mới + định kỳ 15 phút/lần   (Bearer SYNC_SECRET)
-                   │   ② Vercel Cron: mỗi ngày ~06:00 giờ VN (vercel.json), dự phòng            (Bearer CRON_SECRET)
-                   │   ③ Dashboard đang mở: nút “Làm mới” + “Tự đồng bộ” khi dữ liệu cũ hơn     (Bearer Firebase ID token)
-                   │      5/15/30 phút (người xem tự chọn, mặc định 15 phút)
+                   │   ① Apps Script gắn với Sheet: ngay khi có phiếu mới + kiểm tra định kỳ 15 phút/lần (Bearer SYNC_SECRET)
+                   │   ② Vercel Cron: mỗi ngày ~06:00 giờ VN (vercel.json), luôn chạy đầy đủ    (Bearer CRON_SECRET)
+                   │   ③ Dashboard: nút “Làm mới” (không còn “Tự đồng bộ” từ trình duyệt)      (Bearer Firebase ID token)
                    ▼
         /api/sync  (Vercel Function, Node.js)
-        đọc Sheet qua gviz → so sánh mã băm → CHỈ ghi phần thay đổi
+        đọc Sheet (Sheets API) → dấu vân tay trùng lượt trước? → BỎ QUA (2 lượt đọc, 0 ghi)
+                                                  khác → so sánh mã băm → CHỈ ghi phần thay đổi
                    ▼
         Cloud Firestore (project dugiotih)
                    ▼  onSnapshot (realtime), kiểm tra quyền bằng Security Rules
@@ -650,7 +651,7 @@ duyệt, nhưng không sửa được thiết lập trên Entra.
 | Nơi | Kiểm tra |
 |---|---|
 | `firestore.rules` (mọi lượt đọc Firestore từ trình duyệt) | đăng nhập bằng `microsoft.com` + email có trong `config/access.emails` hoặc tên miền có trong `config/access.domains`. Chưa có `config/access` (chưa đồng bộ lần nào) → từ chối. Client không được ghi ở đâu cả; `config/*` không ai đọc được từ trình duyệt. |
-| `/api/sync` (nút “Làm mới”, “Tự đồng bộ”, “Thử đồng bộ lần đầu”) | xác minh Firebase ID token bằng Admin SDK, yêu cầu `sign_in_provider = microsoft.com` và email; được phép nếu email/tên miền có trong `config/access` hoặc trong biến môi trường (`ALLOWED_EMAILS`, `ALLOWED_DOMAINS`) – nhờ đó có thể đồng bộ ngay cả trước lần đồng bộ đầu tiên. |
+| `/api/sync` (nút “Làm mới”, “Thử đồng bộ lần đầu”) | xác minh Firebase ID token bằng Admin SDK, yêu cầu `sign_in_provider = microsoft.com` và email; được phép nếu email/tên miền có trong `config/access` hoặc trong biến môi trường (`ALLOWED_EMAILS`, `ALLOWED_DOMAINS`) – nhờ đó có thể đồng bộ ngay cả trước lần đồng bộ đầu tiên. |
 
 Ở cả hai nơi, email phải có **đúng một** dấu `@` và được so khớp chính xác (không nhận tên miền con hay tên miền
 giả dạng như `…@hoangmaistarschool.edu.vn.evil.com`).
@@ -1039,13 +1040,23 @@ Nhật ký đăng nhập Microsoft: Entra admin center → **Sign-in logs** (l�
 - **Đọc (v2):** mở dashboard ≈ 1 (`v2_access`) + 1 (`v2_meta/global`) + số phạm vi + số khối (BGH liên cấp ≈ 6–10,
   giáo viên ≈ 3–4), cộng một lượt đọc `v2_access` mỗi lần Security Rules kiểm tra một phạm vi. Dashboard v2 không giữ
   bộ nhớ đệm trên ổ đĩa nên mỗi lần mở trang đọc lại các tài liệu này – vẫn rất nhỏ so với 50.000 lượt/ngày.
+- **Chỉ đồng bộ khi Google Sheet có dữ liệu mới:** mỗi lượt gọi (trừ cron và `?force=1`) đọc Sheet rồi tính *dấu vân
+  tay* (SHA-256) của mọi đầu vào – dữ liệu thô các tab, chế độ chia sẻ, cấu hình Sheet/tab/ADMIN_EMAILS/tên miền, thang
+  xếp loại, phiên bản mã (`VERCEL_GIT_COMMIT_SHA`) và tuần chốt số liệu đối sánh. Trùng với lượt đầy đủ gần nhất →
+  trả `skipped: "unchanged"` sau **2 lượt đọc** (`v2_config/state` + khóa), **0 lượt ghi**, không ghi `v2_meta/global`
+  nên các tab đang mở cũng không phải đọc lại. Người dùng bấm “Làm mới”: thêm 2 lượt đọc (giới hạn 60 s), 1 lượt
+  `v2_access` nếu không thuộc ADMIN_EMAILS, và 1 lượt ghi giờ kiểm tra vào khóa (để bấm lại trong 60 s không đọc lại Sheet).
+  Khi có thay đổi, máy chủ đọc lại Sheet sau khi giữ khóa (không dùng bản đọc trước khóa – tránh ghi đè lượt mới hơn). Tab đọc lỗi, dùng dữ liệu cũ, lượt dở dang hoặc đang có lượt khác giữ khóa
+  → không bỏ qua. Cron 06:00 luôn chạy đầy đủ (kiểm tra, tự sửa sai lệch). Sau mỗi lần triển khai mã mới và đầu mỗi tuần
+  (công bố lại số liệu đối sánh) lượt kế tiếp tự chạy đầy đủ một lần. Trình duyệt không còn tự gọi đồng bộ.
 - **Ghi (v2):** mỗi lượt đồng bộ chỉ ghi phần thay đổi. Một phiếu mới ghi lại phạm vi cấp, phạm vi tổ, phạm vi cá nhân
   của người dạy và người dự (mỗi phạm vi 1 tài liệu + khối bị đổi) + `v2_meta/global` + `v2_config/state` + khóa:
   khoảng **8–12 lượt ghi/phiếu** (đo trên dữ liệu thật: trung bình 11). Số liệu đối sánh chỉ được công bố lại tối đa
   **một lần mỗi tuần** cho mỗi tổ/cấp → lượt đồng bộ đầu tiên của tuần ghi lại các phạm vi tổ và cá nhân (≈ 320 tài
-  liệu với dữ liệu hiện tại). Ngày cao điểm (~120 phiếu) ≈ 1.300 lượt ghi; lượt không có thay đổi chỉ ghi `meta`,
-  `state` và khóa (Apps Script ~96 lượt/ngày/Sheet → vài trăm lượt ghi). Lần đồng bộ đầu tiên / `?force=1` ghi
-  khoảng 650 tài liệu. Tổng cộng vẫn dưới 10 % hạn mức 20.000 lượt ghi/ngày của gói Spark.
+  liệu với dữ liệu hiện tại). Ngày cao điểm (~120 phiếu) ≈ 1.300 lượt ghi; lượt bỏ qua vì Sheet không đổi **không ghi
+  gì**; lượt đầy đủ không có thay đổi (cron 06:00, lượt đầu sau mỗi lần triển khai) chỉ ghi `meta`, `state` và khóa (4 lượt).
+  Lần đồng bộ đầu tiên, mất `v2_config/state` hoặc `?force=1` đọc + ghi lại **toàn bộ** (≈ 1.200 lượt đọc + 1.200
+  lượt ghi với dữ liệu 10/2026) – chỉ dùng khi thật cần; muốn chạy ngay một lượt thường thì bấm “Làm mới”.
 - Khi bản v1 và v2 cùng chạy (thời gian thử Preview), hai bản dùng chung hạn mức của project `dugiotih`.
 - (v1) Bộ sưu tập `phieu` để xem trong console/ứng dụng khác; dashboard **không** đọc nó (đọc toàn bộ tốn ~1 lượt/phiếu).
   v2 không ghi `phieu`.

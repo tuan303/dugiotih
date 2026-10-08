@@ -696,13 +696,7 @@ tr.grp-row td small{font-weight:400;color:var(--muted);margin-left:6px}
     <div class="hdr-ctl">
       <span class="live loading" id="live"><span class="dot"></span><span id="liveTx">Đang kết nối…</span></span>
       <select class="hsel" id="asSel" aria-label="Xem thử với tài khoản" title="Chế độ xem trước cục bộ: chọn tài khoản để xem thử phân quyền" hidden></select>
-      <select class="hsel" id="autoSel" aria-label="Tự động đồng bộ từ Google Sheet" title="Tự gọi đồng bộ khi dữ liệu cũ hơn khoảng thời gian đã chọn">
-        <option value="0">Tự đồng bộ: Tắt</option>
-        <option value="5">Tự đồng bộ: 5 phút</option>
-        <option value="15" selected>Tự đồng bộ: 15 phút</option>
-        <option value="30">Tự đồng bộ: 30 phút</option>
-      </select>
-      <button class="hbtn" id="refreshBtn" title="Đồng bộ ngay từ Google Sheet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/></svg><span>Làm mới</span></button>
+      <button class="hbtn" id="refreshBtn" title="Kiểm tra Google Sheet và cập nhật ngay nếu có dữ liệu mới"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/></svg><span>Làm mới</span></button>
       <button class="hbtn" id="themeBtn" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <span class="user" id="userBox" hidden>
         <span class="uchip" id="userChip"><span class="ua" aria-hidden="true"></span><span class="un"></span></span>
@@ -822,9 +816,7 @@ const CFG = {
   SYNC_MAX_CONTINUE: 12,        // số lượt gọi tiếp tối đa khi máy chủ báo đồng bộ dở dang (partial)
   SYNC_CONTINUE_DELAY_MS: 1500,
   SCHOOL_YEAR_START_MONTH: 8, // Năm học bắt đầu từ tháng 8
-  AUTOSYNC_OPTIONS: [0, 5, 15, 30],
-  DEFAULT_AUTOSYNC_MIN: 15,
-  AUTOSYNC_CHECK_MS: 30000,
+  LIVE_TICK_MS: 30000, // làm mới nhãn trạng thái kết nối (không gọi đồng bộ)
   OFFLINE_AFTER_MS: 8000, // còn đọc từ bộ nhớ đệm sau ngần này thời gian → coi là ngoại tuyến
   LOG_PAGE_SIZE: 30,
   LOCAL_FILE: './dev-data-v2.json',
@@ -916,7 +908,7 @@ const S = {
   records: [], byId: new Map(), crit: [], staff: [], bghStaff: [], staffOk: false,
   loadedAt: null, ready: false, partial: false, lastSig: '', newIds: new Set(),
   view: document.documentElement.dataset.view || 'gate', entered: false, signingOut: false,
-  email: '', gateMsg: null, syncing: false, lastAutoTry: 0, liveErr: '', listenAt: 0,
+  email: '', gateMsg: null, syncing: false, liveErr: '', listenAt: 0,
   tab: ls.get('hms.tab') || 'overview',
   f: { period: 'year', from: null, to: null, group: '', subject: '', grade: '', obs: '', q: '' },
   tSort: { k: 'n', d: -1 }, logPage: 0, critSort: 'code', lastW: 0,
@@ -1661,7 +1653,7 @@ function stateCard({ icon = ICON.db, lb = '', title, text, help = '', sync = fal
     if (!btn.isConnected) return;
     btn.disabled = false;
     if (r.ok) {
-      S.syncMsg = { kind: 'ok', text: r.skipped === 'recent' ? 'Dữ liệu vừa được đồng bộ chưa đầy 1 phút trước. Nếu vẫn chưa thấy dữ liệu, tài khoản này chưa được cấp quyền – vui lòng liên hệ quản trị.' : `Đồng bộ thành công${r.count != null ? ` (${nf0.format(r.count)} phiếu)` : ''}. Dashboard sẽ tự mở khi tài khoản có quyền xem.` };
+      S.syncMsg = { kind: 'ok', text: r.skipped === 'recent' || r.skipped === 'unchanged' ? `${r.skipped === 'recent' ? 'Dữ liệu vừa được đồng bộ chưa đầy 1 phút trước' : 'Google Sheet chưa có dữ liệu mới'}. Nếu vẫn chưa thấy dữ liệu, tài khoản này chưa được cấp quyền – vui lòng liên hệ quản trị.` : `Đồng bộ thành công${r.count != null ? ` (${nf0.format(r.count)} phiếu)` : ''}. Dashboard sẽ tự mở khi tài khoản có quyền xem.` };
     } else S.syncMsg = { kind: 'err', text: syncErrText(r) };
     msg.className = 'msg ' + S.syncMsg.kind; msg.textContent = S.syncMsg.text;
     setTimeout(() => { S.syncMsg = null; }, 15000);
@@ -1755,7 +1747,8 @@ function syncToast(r) {
   if (r.busy) return;
   if (r.status === 409 || r.skipped === 'locked') { showToast(syncErrText(r)); return; }
   if (!r.ok) { showToast('Không đồng bộ được: ' + syncErrText(r)); return; }
-  if (r.skipped === 'recent') { showToast('Dữ liệu vừa được đồng bộ chưa đầy 1 phút trước – đây đã là bản mới nhất.'); return; }
+  if (r.skipped === 'recent') { showToast('Dữ liệu vừa được kiểm tra/đồng bộ chưa đầy 1 phút trước – đây đã là bản mới nhất.'); return; }
+  if (r.skipped === 'unchanged') { showToast('Google Sheet chưa có dữ liệu mới – đang hiển thị bản mới nhất.'); return; }
   if (r.partial) { showToast('Đã đồng bộ một phần dữ liệu – hệ thống sẽ ghi tiếp phần còn lại ở lượt đồng bộ sau.'); return; }
   const a = +r.added || 0, u = +r.updated || 0, d = +r.removed || 0;
   const parts = [a && `${nf0.format(a)} phiếu mới`, u && `${nf0.format(u)} phiếu được cập nhật`, d && `${nf0.format(d)} phiếu bị xóa`].filter(Boolean);
@@ -1769,7 +1762,7 @@ const fmtWhen = ms => { const d = new Date(ms); return +sod(d) === +sod(new Date
 function triggerLabel(t) {
   t = String(t || '');
   if (t === 'cron') return 'tự động theo lịch';
-  if (t === 'webhook') return 'tự động khi có phiếu mới';
+  if (t === 'webhook') return 'tự động khi Google Sheet có thay đổi';
   if (t === 'dry-run') return 'chạy thử cục bộ';
   // Máy chủ không công khai email người bấm đồng bộ ('user'); dữ liệu cũ dạng 'user:<email>' cũng không hiển thị email.
   return /^user(:|$)/.test(t) ? 'do người dùng yêu cầu' : t;
@@ -1779,14 +1772,14 @@ const anyCache = () => V2.accCache || (V2.acc && V2.metaUnsub && V2.metaCache) |
 function updateLive() {
   const el = $('#live'), tx = $('#liveTx'), m = V2.meta, ms = syncedMs(m);
   let st = 'loading', text = 'Đang kết nối…';
-  let title = ms ? `Đồng bộ từ Google Sheet lần cuối: ${fmtD(new Date(ms))} ${new Date(ms).toLocaleTimeString('vi-VN')}${m?.trigger ? ` (${triggerLabel(m.trigger)})` : ''}` : '';
+  let title = ms ? `Dữ liệu cập nhật từ Google Sheet lần cuối: ${fmtD(new Date(ms))} ${new Date(ms).toLocaleTimeString('vi-VN')}${m?.trigger ? ` (${triggerLabel(m.trigger)})` : ''}. Hệ thống tự kiểm tra Google Sheet và chỉ cập nhật khi có dữ liệu mới.` : '';
   if (LOCAL) { st = S.syncing ? 'loading' : 'ok'; text = S.syncing ? 'Đang tải dev-data-v2.json…' : `Xem trước cục bộ${ms ? ' · dữ liệu ' + fmtWhen(ms) : ''}`; }
   else if (S.liveErr) { st = 'err'; text = S.ready ? 'Mất kết nối · đang hiện dữ liệu cũ' : 'Lỗi kết nối'; title = S.liveErr; }
   else if (S.syncing) text = S.syncNote || 'Đang đồng bộ…';
   else if (!V2.accKnown) text = 'Đang kết nối…';
   else if (anyCache()) {
     if (navigator.onLine === false || Date.now() - S.listenAt > CFG.OFFLINE_AFTER_MS) { st = 'off'; text = 'Ngoại tuyến – dữ liệu bộ nhớ đệm'; }
-  } else { st = 'ok'; text = `Trực tuyến · đồng bộ ${ms ? fmtWhen(ms) : '–'}`; }
+  } else { st = 'ok'; text = `Trực tuyến · cập nhật ${ms ? fmtWhen(ms) : '–'}`; }
   el.className = 'live' + (st === 'ok' ? '' : st === 'loading' ? ' loading' : ' ' + st);
   tx.textContent = text; el.title = title;
 }
@@ -1799,23 +1792,12 @@ function renderUser(name, email, avatar) {
   $('#userChip .un').textContent = name;
 }
 
-/* Tự động đồng bộ: định kỳ kiểm tra, nếu dữ liệu trên Firestore cũ hơn khoảng đã chọn thì gọi /api/sync (không báo toast). */
-let autoMin = +(ls.get('hms.autosync') ?? CFG.DEFAULT_AUTOSYNC_MIN);
-if (!CFG.AUTOSYNC_OPTIONS.includes(autoMin)) autoMin = CFG.DEFAULT_AUTOSYNC_MIN;
-$('#autoSel').value = String(autoMin);
-$('#autoSel').addEventListener('change', e => { autoMin = +e.target.value; ls.set('hms.autosync', autoMin); S.lastAutoTry = 0; autoTick(); });
-async function autoTick() {
-  updateLive();
-  if (LOCAL || !autoMin || document.hidden || S.syncing || S.view !== 'app' || !S.ready || !FB.auth?.currentUser || navigator.onLine === false) return;
-  const iv = autoMin * 60000, now = Date.now();
-  if (now - syncedMs(V2.meta) < iv || now - S.lastAutoTry < iv) return;
-  S.lastAutoTry = now;
-  const r = await callSync();
-  if (!r.ok && !r.busy && r.status !== 409) console.warn('[tự đồng bộ]', r.error || r);
-}
-setInterval(autoTick, CFG.AUTOSYNC_CHECK_MS);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) autoTick(); });
-window.addEventListener('online', autoTick);
+/* Trình duyệt KHÔNG tự gọi đồng bộ: Google Sheet báo máy chủ khi có phiếu mới / định kỳ kiểm tra (Apps Script), máy chủ chỉ
+   ghi Firestore khi Sheet thật sự thay đổi, và dữ liệu mới tự đến mọi tab đang mở (onSnapshot). Ở đây chỉ làm mới nhãn trạng thái. */
+ls.del('hms.autosync'); // tùy chọn “Tự đồng bộ” của bản cũ
+setInterval(updateLive, CFG.LIVE_TICK_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) updateLive(); });
+window.addEventListener('online', updateLive);
 window.addEventListener('offline', updateLive);
 $('#refreshBtn').addEventListener('click', async () => {
   if (LOCAL) { loadLocal(true); return; }
@@ -2117,7 +2099,7 @@ function renderFoot() {
   const src = caps.length > 1 ? `Google Sheet “Phiếu đánh giá giờ dạy” của ${caps.map(capLabel).join(', ')}` : `Google Sheet “Phiếu đánh giá giờ dạy”${caps[0] ? ` – ${capLabel(caps[0])}` : ''}`;
   const nCrit = S.crit.length;
   $('#foot').innerHTML = `<span>Nguồn: ${esc(src)} · ${nf0.format(S.records.length)} phiếu${nCrit ? ` · ${nCrit} tiêu chí${CFG.SHOW_TOTAL ? ` (tối đa ${nCrit * 5} điểm)` : ''}` : ''}</span>
-  <span>${ms ? `Đồng bộ lần cuối: ${fmtD(new Date(ms))} ${fmtT(new Date(ms))}${m.trigger ? ` · ${esc(triggerLabel(m.trigger))}` : ''}` : 'Chưa rõ thời điểm đồng bộ'}</span>
+  <span>${ms ? `Cập nhật lần cuối: ${fmtD(new Date(ms))} ${fmtT(new Date(ms))}${m.trigger ? ` · ${esc(triggerLabel(m.trigger))}` : ''}` : 'Chưa rõ thời điểm cập nhật'}</span>
   <span>Xếp loại theo điểm TB/tiêu chí: ${LV_SCALE_TXT}</span>`;
 }
 
@@ -2775,7 +2757,6 @@ if (LOCAL) {
   setView('app');
   renderUser('Xem trước cục bộ', 'Chế độ xem trước cục bộ – dữ liệu từ dev-data-v2.json, không đăng nhập', 'DEV');
   $('#signOutBtn').hidden = true;
-  $('#autoSel').hidden = true;
   $('#refreshBtn').title = 'Đọc lại dev-data-v2.json';
   resetBoot('Đang đọc dev-data-v2.json…');
   loadLocal();

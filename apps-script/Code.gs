@@ -7,9 +7,9 @@
  *
  * Nhiệm vụ: gọi máy chủ Vercel (POST /api/sync) để đồng bộ Sheet → Firestore
  *   • ngay khi có phiếu mới được gửi từ Google Form (trigger “Khi gửi biểu mẫu”);
- *   • định kỳ 15 phút/lần (bắt cả những chỉnh sửa gõ trực tiếp trên Sheet).
- * Mỗi lượt, máy chủ đọc lại dữ liệu của MỌI cấp đã cấu hình (không chỉ Sheet đã gọi) và chỉ ghi phần thay đổi,
- * nên gọi nhiều lần cũng không tốn kém.
+ *   • định kỳ 15 phút/lần kiểm tra (bắt cả những chỉnh sửa gõ trực tiếp trên Sheet).
+ * Mỗi lượt, máy chủ đọc lại dữ liệu của MỌI cấp đã cấu hình (không chỉ Sheet đã gọi); Sheet không đổi kể từ lượt
+ * trước → máy chủ bỏ qua, không ghi gì vào Firestore (“Google Sheet không có thay đổi”), có thay đổi → chỉ ghi phần đổi.
  *
  * CẤU HÌNH – KHÔNG ghi bí mật vào mã nguồn:
  *   Cài đặt dự án (biểu tượng bánh răng) → Thuộc tính tập lệnh (Script Properties):
@@ -63,7 +63,7 @@ function setup() {
     '  SYNC_SECRET : ' + (secret ? 'đã đặt (' + secret.length + ' ký tự)' : '(chưa đặt)'),
     '  Chu kỳ      : ' + (typeof schedule === 'number' ? (schedule ? 'mỗi ' + schedule + ' phút' : 'không đồng bộ định kỳ (SCHEDULE_MINUTES=0)') : schedule),
     '  Trigger     : ' + (triggers.length ? '\n' + triggers.join('\n') : '(chưa cài – chạy installTriggers)'),
-    '  Lần đồng bộ thành công gần nhất: ' + (lastOk ? new Date(lastOk).toLocaleString('vi-VN') : '(chưa có)'),
+    '  Lần kiểm tra/đồng bộ thành công gần nhất: ' + (lastOk ? new Date(lastOk).toLocaleString('vi-VN') : '(chưa có)'),
   ].join('\n'));
 }
 
@@ -196,7 +196,8 @@ function runSync_(reason, coveredAfterMs) {
         return b;
       }
       if (res.code >= 200 && res.code < 300 && b.ok) {
-        if (!b.skipped) props.setProperty(PROP_LAST_OK, String(startedAt));
+        // 'unchanged': máy chủ đã đọc Sheet sau thời điểm này và thấy dữ liệu đã có đủ → cũng tính là đã bao gồm.
+        if (!b.skipped || b.skipped === 'unchanged') props.setProperty(PROP_LAST_OK, String(startedAt));
         console.log(tag + describe_(b));
         (Array.isArray(b.warnings) ? b.warnings : []).forEach(w => console.warn(tag + 'Lưu ý: ' + w));
         return b;
@@ -234,6 +235,7 @@ function callSync_(cfg, reason) {
  * nên dùng được với cả máy chủ v1 (một cấp) lẫn v2 (toàn trường, có danh sách `levels`).
  */
 function describe_(b) {
+  if (b.skipped === 'unchanged') return 'Google Sheet không có thay đổi kể từ lượt trước – máy chủ không ghi gì (' + (b.count != null ? b.count + ' phiếu' : '?') + ').';
   if (b.skipped) return 'Máy chủ bỏ qua lượt này (' + b.skipped + ').';
   const parts = ['Đồng bộ xong (' + (b.trigger || '?') + ')'];
   // v2: levels = { tih: {enabled, count, stale}, thcs: {…}, thpt: {…} }

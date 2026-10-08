@@ -10,9 +10,9 @@
 //     (state còn giữ số liệu đối sánh đã công bố – state.bench – để chỉ công bố lại khi đủ phiếu mới, xem scopes.js)
 // Client đọc v2_access/<email> của mình rồi các v2_scopes được liệt kê trong đó (firestore.rules kiểm soát).
 // v2_meta/global.trigger KHÔNG chứa email người bấm đồng bộ ('user'); email chỉ lưu ở v2_config/state.lastTrigger.
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { SCHEMA_VERSION_V2, CAPS, CAP_INFO, hash53, parseFormTable, parseStaffTable } from '../lib/shared.js';
+import { SCHEMA_VERSION_V2, CAPS, CAP_INFO, hash53, parseFormTable, parseStaffTable, LEVELS_SIG } from '../lib/shared.js';
 import { envDomains } from './auth.js';
 import { resolveAccess, parseRolesTable, adminEmails, DEFAULT_ROLES_TAB } from './roles.js';
 import { buildScopes, scopeIdLevel, CHUNK_OPTS, benchCutoff, benchGroups, publishBenchmarks } from './scopes.js';
@@ -205,17 +205,14 @@ async function levelChanges(store, s, prevCh) {
   return { added, updated, removed };
 }
 
-/* ---------------- Một lượt đồng bộ (đã giữ khóa) ---------------- */
-async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log, deadline: callDeadline }) {
-  const startMs = clock();
-  const warnings = [];
-  const logRaw = (what, e) => { if (e && !e.expose) log?.warn?.(`[sync] ${what}:`, e); };
+/* ---------------- Đọc Sheet + dấu vân tay đầu vào ---------------- */
+// Đọc song song: mỗi cấp (biểu mẫu + DS Nhân sự + thăm dò chế độ chia sẻ) và tab Phân quyền. Lỗi đọc không ném ra
+// mà nằm trong { e } của từng mục (syncOnce quyết định giữ dữ liệu cũ / dùng bản lưu).
+async function fetchAll(cfg, fetchTable) {
   const settle = p => Promise.resolve().then(() => p()).then(t => ({ t }), e => ({ e }));
   const probe = (sheetId, tab) => (typeof fetchTable.isPublic === 'function'
     ? Promise.resolve().then(() => fetchTable.isPublic(sheetId, tab)).catch(() => null)
     : Promise.resolve(false));
-
-  // 1) Đọc song song: mỗi cấp (biểu mẫu + DS Nhân sự + thăm dò chế độ chia sẻ) và tab Phân quyền.
   const on = cfg.levels.filter(L => L.enabled);
   const [fetchedLevels, rolesRes] = await Promise.all([
     Promise.all(on.map(L => Promise.all([
@@ -225,6 +222,56 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
     ]))),
     cfg.rolesSheetId ? settle(() => fetchTable(cfg.rolesSheetId, { sheet: cfg.rolesTab })) : Promise.resolve(null),
   ]);
+  return { fetchedLevels, rolesRes };
+}
+
+// Tăng khi đổi cách dựng phạm vi/quyền/đối sánh mà không triển khai lại (chạy cục bộ; trên Vercel mã triển khai đã nằm trong dấu vân tay).
+export const FP_VERSION = 1;
+/**
+ * Dấu vân tay của MỌI đầu vào quyết định nội dung ghi ra Firestore: dữ liệu thô các tab đã đọc, chế độ chia sẻ, cấu hình
+ * (Sheet/tab, ADMIN_EMAILS, tên miền), thang xếp loại, lần triển khai (mã + biến môi trường) và tuần chốt số liệu đối sánh
+ * (sang tuần mới → chạy lại).
+ * Trùng với lượt đầy đủ gần nhất → kết quả chắc chắn giống hệt → bỏ qua lượt đồng bộ, không ghi gì.
+ * @returns {string} '' khi có tab đọc lỗi (khi đó không bao giờ bỏ qua – lượt đầy đủ xử lý lỗi/cảnh báo như cũ)
+ */
+export function inputFingerprint({ cfg, env = {}, pre, nowMs }) {
+  const on = cfg.levels.filter(L => L.enabled);
+  if (pre.rolesRes?.e) return '';
+  const cut = benchCutoff(nowMs);
+  const h = createHash('sha256');
+  h.update(JSON.stringify({
+    // Mỗi lần triển khai (kể cả Redeploy sau khi đổi biến môi trường – cùng commit) có VERCEL_DEPLOYMENT_ID/VERCEL_URL riêng
+    // → lượt đầu sau triển khai luôn chạy đầy đủ, áp dụng ngay mọi thay đổi mã/cấu hình.
+    v: FP_VERSION, schema: SCHEMA_VERSION_V2, lv: LEVELS_SIG,
+    code: [env.VERCEL_GIT_COMMIT_SHA, env.VERCEL_DEPLOYMENT_ID, env.VERCEL_URL].map(x => String(x || '')),
+    caps: cfg.levels.map(L => [L.cap, L.enabled, L.sheetId, L.formTab, L.staffTab]),
+    roles: [cfg.rolesSheetId, cfg.rolesTab], admins: cfg.adminEmails, domains: cfg.envDomains,
+    cut: [cut.at, cut.sy],
+  }));
+  for (let i = 0; i < on.length; i++) {
+    const [f, s, pub] = pre.fetchedLevels[i];
+    if (f.e || s?.e) return '';
+    h.update('\u0000L' + on[i].cap); h.update(JSON.stringify(f.t));
+    h.update('\u0000S'); h.update(JSON.stringify(s ? s.t : null));
+    h.update('\u0000P' + String(pub));
+  }
+  h.update('\u0000R'); h.update(JSON.stringify(pre.rolesRes ? pre.rolesRes.t : null));
+  return h.digest('base64url');
+}
+
+/* ---------------- Một lượt đồng bộ (đã giữ khóa) ---------------- */
+async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, log, deadline: callDeadline }) {
+  const startMs = clock();
+  const warnings = [];
+  const logRaw = (what, e) => { if (e && !e.expose) log?.warn?.(`[sync] ${what}:`, e); };
+
+  // 1) Đọc Sheet – LUÔN đọc lại khi đã giữ khóa (bản đọc trước khóa của runSync chỉ để tính dấu vân tay: nếu dùng lại, một
+  //    lượt đọc chậm có thể ghi đè dữ liệu cũ lên lượt mới hơn vừa xong). Đọc thêm chỉ tốn Google Sheets API, không tốn Firestore.
+  const on = cfg.levels.filter(L => L.enabled);
+  const fetched = await fetchAll(cfg, fetchTable);
+  const { fetchedLevels, rolesRes } = fetched;
+  // Dùng dữ liệu cũ / bản lưu vì đọc lỗi → không lưu dấu vân tay (lượt sau chạy đầy đủ, vẫn báo cảnh báo cho tới khi hết lỗi).
+  let degraded = false;
   const fetchMs = clock() - startMs;
   // Cảnh báo về cách đọc Sheet (vd. Google Sheets API chưa bật → đọc qua gviz, có thể thiếu dòng khi Sheet đang lọc).
   if (fetchTable.warnings) for (const w of fetchTable.warnings) warnings.push(w);
@@ -244,6 +291,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
       // không xóa phạm vi của cấp. Muốn gỡ hẳn một cấp: đồng bộ bằng CRON_SECRET kèm ?force=1.
       const prev = (Number(prevLevels[cap]?.count) || 0) > 0 && !force ? await loadPrevLevel(store, cap) : null;
       if (prev) {
+        degraded = true;
         const cached = await store.get(staffCachePath(cap));
         const prevDoc = await store.get(scopePath(scopeIdLevel(cap)));
         const keptAt = Number(prevLevels[cap]?.syncedAtMs) || null;
@@ -275,6 +323,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
       formErr = `số phiếu giảm bất thường từ ${prevCount} xuống ${records.length} – có thể Sheet đang bật bộ lọc hoặc bị xóa nhầm dữ liệu`;
     }
     if (formErr) {
+      degraded = true;
       formFailures++;
       firstFormError ||= formRes.e || publicError(`${label}: ${formErr}`, 'SHEET_STRUCTURE'); // lỗi lạ giữ nguyên → handler trả thông báo chung
       const prev = await loadPrevLevel(store, cap);
@@ -294,6 +343,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
         else if (parsed && !parsed.rows.length && prevStaffHashes[cap]) err = 'danh sách trống';
       }
       if (err) {
+        degraded = true;
         const cached = await store.get(staffCachePath(cap));
         staffRows = parseJSON(cached?.rows, []);
         warnings.push(`${label}: không đọc được “DS Nhân sự” (${err}) – ${staffRows.length ? 'dùng bản lưu gần nhất' : 'chưa có bản lưu, tạm thời chưa có quyền tự động cho cấp này'}.`);
@@ -325,6 +375,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
       if (!parsed.recognized) err = `tab “${cfg.rolesTab}” không có cột Email và Vai trò (sai tên tab ROLES_TAB? Google trả về tab đầu tiên khi tên tab không tồn tại)`;
     }
     if (err) {
+      degraded = true;
       const cached = await store.get(PATHS.roles);
       if (!cached) throw publicError(`Không đọc được tab Phân quyền (${err}) và chưa có bản lưu trước – dừng đồng bộ để không cấp nhầm quyền.`, 'ROLES_SHEET');
       rolesRows = parseJSON(cached.rows, []);
@@ -481,6 +532,7 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
         levels: levelState, staffHashes, rolesHash,
         bench: JSON.stringify(benchState),
         partial: true,
+        inputFp: '',
         lastRunMs: finishedMs,
         lastTrigger: trigger,
         lastResult: { partial: true, pending: pendingCount, warnings: warnings.length },
@@ -526,6 +578,8 @@ async function syncOnce({ store, fetchTable, cfg, env, trigger, clock, force, lo
       rolesHash,
       bench: JSON.stringify(benchState),
       partial: false,
+      inputFp: force || degraded ? '' : inputFingerprint({ cfg, env, pre: fetched, nowMs: startMs }),
+      lastWarnings: warnings.slice(0, 30).map(w => String(w).slice(0, 500)), // trả lại khi bỏ qua lượt (Sheet không đổi)
       lastRunMs: finishedMs,
       lastTrigger: trigger,
       lastResult: { count, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted, accessWritten, accessDeleted, durationMs: result.durationMs, warnings: warnings.length },
@@ -566,6 +620,7 @@ function mergeResults(a, b) {
  * @returns {Promise<object>} { ok, skipped?, count, levels, scopes, scopesWritten, scopesDeleted, chunksWritten, chunksDeleted,
  *   accessCount, accessWritten, accessDeleted, durationMs, syncedAtMs, trigger, warnings, runs, debug }
  *   skipped: 'recent' (người dùng bấm lại < 60 s: ok:true nếu lượt trước thành công, ok:false + error nếu thất bại) | 'locked'
+ *          | 'unchanged' (Sheet và cấu hình không đổi kể từ lượt đầy đủ gần nhất: không lấy khóa, không ghi gì)
  */
 export async function runSync({ store, fetchTable, env = {}, trigger = 'manual', nowMs, force = false, log = console } = {}) {
   if (!store || typeof fetchTable !== 'function') throw new TypeError('runSync cần store và fetchTable');
@@ -581,17 +636,19 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
   const empty = { count: null, scopesWritten: 0, scopesDeleted: 0, chunksWritten: 0, chunksDeleted: 0, accessWritten: 0, accessDeleted: 0 };
 
   // Giới hạn tần suất cho người dùng (cron và Apps Script không bị giới hạn) – như v1:
-  //  • lượt trước THÀNH CÔNG < 60 s → { ok:true, skipped:'recent' };
+  //  • lượt trước THÀNH CÔNG hoặc lượt kiểm tra “không đổi” do người dùng bấm < 60 s → { ok:true, skipped:'recent' }
+  //    (không đọc lại Sheet – tránh bấm liên tục làm cạn hạn mức Google Sheets API);
   //  • lượt trước (bắt đầu < 60 s) THẤT BẠI → { ok:false, skipped:'recent', error } (handler trả 429).
   if (/^user:/.test(trigger) && !force) {
     const [st, lk] = await Promise.all([store.get(PATHS.state), store.get(PATHS.lock)]);
     const lastOk = Number(st?.lastRunMs) || 0;
+    const lastCheck = Math.max(lastOk, Number(lk?.checkedAt) || 0);
     const lastTry = Number(lk?.acquiredAt) || 0;
-    if (lastOk && startMs - lastOk < RATE_LIMIT_MS && !st?.partial) {
+    if (lastCheck && startMs >= lastCheck && startMs - lastCheck < RATE_LIMIT_MS && !st?.partial) {
       return {
         ok: true, skipped: 'recent', ...empty, count: st?.lastResult?.count ?? null,
-        durationMs: clock() - startMs, syncedAtMs: lastOk, trigger,
-        retryAfterMs: RATE_LIMIT_MS - (startMs - lastOk),
+        durationMs: clock() - startMs, syncedAtMs: lastOk || null, trigger,
+        retryAfterMs: RATE_LIMIT_MS - (startMs - lastCheck),
       };
     }
     const running = (Number(lk?.until) || 0) > startMs;
@@ -602,6 +659,32 @@ export async function runSync({ store, fetchTable, env = {}, trigger = 'manual',
         durationMs: clock() - startMs, syncedAtMs: lastOk || null, trigger, retryAfterMs,
         error: `Lượt đồng bộ gần nhất chưa thành công. Vui lòng thử lại sau ${Math.ceil(retryAfterMs / 1000)} giây.`,
       };
+    }
+  }
+
+  // Chỉ đồng bộ khi có dữ liệu mới: đọc Sheet (không tốn quota Firestore), so dấu vân tay với lượt đầy đủ gần nhất.
+  // Trùng → trả 'unchanged' sau 2 lượt đọc (state + khóa), không lấy khóa, không ghi meta → các tab đang mở cũng không phải đọc lại.
+  // cron (06:00 mỗi ngày) và force luôn chạy đầy đủ – nhịp kiểm tra định kỳ, tự sửa mọi sai lệch.
+  if (!force && trigger !== 'cron') {
+    const pre = await fetchAll(cfg, fetchTable);
+    const fp = inputFingerprint({ cfg, env, pre, nowMs: startMs });
+    if (fp) {
+      // Đọc trạng thái + khóa SAU khi đọc Sheet. Không bỏ qua khi: đang có lượt khác giữ khóa (có thể đang ghi dở – lượt này
+      // đi đường thường: 409 → lượt kia tự chạy lại), hoặc có lượt đã bắt đầu sau lần ghi trạng thái gần nhất (bị ngắt giữa chừng).
+      const [st, lk] = await Promise.all([store.get(PATHS.state), store.get(PATHS.lock)]);
+      const running = (Number(lk?.until) || 0) > startMs;
+      const ranSince = (Number(lk?.acquiredAt) || 0) > (Number(st?.lastRunMs) || 0);
+      if (st && st.version === SCHEMA_VERSION_V2 && !st.partial && !running && !ranSince && st.inputFp === fp) {
+        // Người dùng bấm “Làm mới”: ghi nhận giờ kiểm tra (1 lượt ghi vào khóa, không chạm meta) để giới hạn 60 s áp dụng cả khi không đổi.
+        if (/^user:/.test(trigger)) {
+          try { await store.commitBatch([{ type: 'set', path: PATHS.lock, data: { checkedAt: startMs }, merge: true }]); } catch { /* chỉ để giới hạn tần suất */ }
+        }
+        return {
+          ok: true, skipped: 'unchanged', ...empty, count: st.lastResult?.count ?? null, added: 0, updated: 0, removed: 0,
+          durationMs: clock() - startMs, syncedAtMs: Number(st.lastRunMs) || null, trigger,
+          warnings: Array.isArray(st.lastWarnings) ? st.lastWarnings.map(String) : [],
+        };
+      }
     }
   }
 

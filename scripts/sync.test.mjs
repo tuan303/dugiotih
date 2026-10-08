@@ -478,11 +478,196 @@ describe('runSync v2 – lỗi Sheet và chốt chặn', () => {
 });
 
 /* =====================================================================
+ * Chỉ đồng bộ khi có dữ liệu mới (dấu vân tay đầu vào)
+ * ===================================================================== */
+describe('runSync v2 – chỉ đồng bộ khi Google Sheet có thay đổi', () => {
+  // Đếm lượt đọc tài liệu (store.get) – khóa đọc trong giao dịch riêng, không đi qua get.
+  const countReads = store => { const g = store.get.bind(store); const c = { n: 0 }; store.get = async p => { c.n++; return g(p); }; return c; };
+
+  test('Sheet không đổi → webhook/người dùng: skipped "unchanged", 0 ghi, 2 lượt đọc, không lấy khóa, meta giữ nguyên', async () => {
+    const { store, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    const meta = await store.get(PATHS.meta), lock = await store.get(PATHS.lock);
+    store.clearLog();
+    const reads = countReads(store);
+    t.now += 15 * 60_000;
+    const r = await sync({ trigger: 'webhook' });
+    assert.deepEqual([r.ok, r.skipped, r.count, r.scopesWritten, r.added], [true, 'unchanged', 18, 0, 0]);
+    assert.equal(r.syncedAtMs, T0, 'giờ đồng bộ = lượt đầy đủ gần nhất');
+    assert.deepEqual(paths(store), []);
+    assert.equal(reads.n, 2, 'chỉ đọc v2_config/state + khóa');
+    assert.deepEqual(await store.get(PATHS.meta), meta, 'meta không bị ghi → các tab đang mở không phải đọc lại');
+    assert.deepEqual(await store.get(PATHS.lock), lock, 'không lấy khóa');
+    t.now += 120_000;
+    const u = await sync({ trigger: `user:gv@${DOMAIN}` });
+    assert.deepEqual([u.ok, u.skipped], [true, 'unchanged']);
+    assert.deepEqual(paths(store), [`set:${PATHS.lock}`], 'người dùng bấm: chỉ ghi giờ kiểm tra vào khóa (không ghi meta)');
+    assert.deepEqual(await store.get(PATHS.meta), meta);
+  });
+
+  test('bấm “Làm mới” liên tục khi Sheet không đổi → trong 60 s trả "recent", không đọc lại Sheet', async () => {
+    const { store, src, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    t.now += 120_000;
+    assert.equal((await sync({ trigger: `user:gv@${DOMAIN}` })).skipped, 'unchanged');
+    assert.equal((await store.get(PATHS.lock)).checkedAt, t.now);
+    const n = src.calls.length;
+    t.now += 10_000;
+    const r = await sync({ trigger: `user:gv@${DOMAIN}` });
+    assert.deepEqual([r.ok, r.skipped, r.retryAfterMs, r.syncedAtMs], [true, 'recent', 50_000, T0]);
+    assert.equal(src.calls.length, n, 'không đọc lại Sheet');
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged', 'Apps Script không bị giới hạn tần suất');
+    t.now += 50_001;
+    assert.equal((await sync({ trigger: `user:gv@${DOMAIN}` })).skipped, 'unchanged');
+  });
+
+  test('lượt kiểm tra đọc Sheet chậm (bản cũ) không ghi đè lượt mới hơn vừa xong – luôn đọc lại Sheet khi đã giữ khóa', async () => {
+    const { store, src, sync, t, env } = setup();
+    await sync({ trigger: 'cron' });
+    let open, slow = true;
+    const gate = new Promise(res => { open = res; });
+    const slowFetch = async (id, tab) => {
+      const snap = await src.fetchTable(id, tab); // dữ liệu tại thời điểm gọi
+      if (slow && id === SHEET_TIH && tab.sheet === FORM_TAB) { slow = false; await gate; }
+      return snap;
+    };
+    slowFetch.isPublic = src.fetchTable.isPublic;
+    t.now += 60_000;
+    const a = runSync({ store, fetchTable: slowFetch, env, trigger: 'webhook', nowMs: () => t.now, log: silentLog });
+    await new Promise(res => setImmediate(res));
+    src.tables[SHEET_TIH][FORM_TAB].rows.push(tihDefaultRow(12)); // phiếu mới trong lúc A đang đọc
+    const c = await sync({ trigger: 'webhook' });
+    assert.equal(c.levels.tih.count, 13);
+    open();
+    const ra = await a;
+    assert.equal(ra.skipped, undefined, 'bản đọc của A khác trạng thái → không bỏ qua');
+    assert.equal(ra.levels.tih.count, 13, 'A đọc lại khi giữ khóa → không ghi đè bằng 12 phiếu cũ');
+    assert.equal((await store.get(scopePath('L_tih'))).count, 13);
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged');
+  });
+
+  test('lượt trước bị ngắt giữa chừng (khóa hết hạn, trạng thái chưa ghi) → không bỏ qua', async () => {
+    const { store, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    t.now += 60_000;
+    await store.commitBatch([{ type: 'set', path: PATHS.lock, data: { until: t.now - 1, token: null, acquiredAt: t.now - 56_000, pendingAt: 0 } }]);
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, undefined);
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged');
+  });
+
+  test('có phiếu mới / sửa phiếu cũ / sửa DS Nhân sự / sửa tab Phân quyền → chạy đầy đủ, sau đó lại bỏ qua', async () => {
+    const roles = [[em('gv.anh'), 'BGH cấp', 'Tiểu học', '', '']];
+    const { store, src, sync, t } = setup({ roles });
+    await sync({ trigger: 'cron' });
+    const step = async (what, change) => {
+      t.now += 15 * 60_000;
+      change();
+      store.clearLog();
+      const r = await sync({ trigger: 'webhook' });
+      assert.equal(r.skipped, undefined, `${what} → phải đồng bộ`);
+      assert.ok(paths(store).includes(`set:${PATHS.meta}`), `${what} → ghi meta`);
+      t.now += 15 * 60_000;
+      assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged', `${what} → lượt kế tiếp bỏ qua`);
+    };
+    await step('phiếu mới', () => src.tables[SHEET_TIH][FORM_TAB].rows.push(tihDefaultRow(12)));
+    await step('sửa nhận xét phiếu cũ', () => { src.tables[SHEET_TIH][FORM_TAB].rows[0].c[22] = { v: 'Cần khắc phục (đã sửa trực tiếp trên Sheet)' }; });
+    await step('sửa DS Nhân sự', () => { src.tables[SHEET_TIH][STAFF_TAB] = tihStaffTable([...TIH_STAFF_ROWS, [100999, 'Người Mới', 'Tiểu học', 'Tổ 3', 'GVCN 3A1', em('moi')]]); });
+    await step('sửa Phân quyền', () => { src.tables[SHEET_ROLES][ROLES_TAB] = rolesTable([...roles, [em('gv.binh'), 'BGH cấp', 'THCS', '', '']]); });
+  });
+
+  test('cron luôn chạy đầy đủ (ghi meta mỗi ngày) dù Sheet không đổi', async () => {
+    const { store, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    t.now += 3_600_000;
+    store.clearLog();
+    const r = await sync({ trigger: 'cron' });
+    assert.equal(r.skipped, undefined);
+    assert.ok(paths(store).includes(`set:${PATHS.meta}`));
+    assert.equal((await store.get(PATHS.meta)).syncedAtMs, t.now);
+  });
+
+  test('sang tuần mới (mốc chốt số liệu đối sánh) hoặc có lần triển khai mới (mã / biến môi trường) → chạy lại một lần', async () => {
+    const { sync, t, env } = setup();
+    await sync({ trigger: 'cron' });
+    t.now += 7 * 86_400_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, undefined, 'tuần mới');
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged');
+    const env2 = { ...env, VERCEL_GIT_COMMIT_SHA: 'abc123' };
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook', env: env2 })).skipped, undefined, 'mã mới');
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook', env: env2 })).skipped, 'unchanged');
+    const env3 = { ...env2, VERCEL_DEPLOYMENT_ID: 'dpl_redeploy' }; // Redeploy cùng commit sau khi đổi biến môi trường
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook', env: env3 })).skipped, undefined, 'triển khai lại');
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook', env: env3 })).skipped, 'unchanged');
+  });
+
+  test('cấp đọc lỗi (dùng dữ liệu cũ) → không lưu dấu vân tay; hết lỗi → chạy đầy đủ rồi mới bỏ qua', async () => {
+    const { store, src, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    src.fail[SHEET_THCS] = new Error('Sheet lỗi');
+    t.now += 60_000;
+    const a = await sync({ trigger: 'webhook' });
+    assert.equal(a.skipped, undefined);
+    assert.equal(a.levels.thcs.stale, true);
+    assert.equal((await store.get(PATHS.state)).inputFp, '');
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, undefined, 'còn lỗi → vẫn chạy (báo cảnh báo)');
+    src.fail = {};
+    t.now += 60_000;
+    const b = await sync({ trigger: 'webhook' });
+    assert.deepEqual([b.skipped, b.levels.thcs.stale], [undefined, false]);
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged');
+  });
+
+  test('lượt trước dở dang hoặc đang có lượt khác giữ khóa → không bỏ qua', async () => {
+    const { store, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    const st = await store.get(PATHS.state);
+    await store.commitBatch([{ type: 'set', path: PATHS.state, data: { ...st, partial: true } }]);
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, undefined, 'dở dang → chạy tiếp');
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged');
+    await store.commitBatch([{ type: 'set', path: PATHS.lock, data: { until: t.now + 30_000, token: 'khac', acquiredAt: t.now, pendingAt: 0 } }]);
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'locked', 'lượt kia sẽ tự chạy lại để lấy thay đổi');
+  });
+
+  test('bỏ qua vẫn trả lại cảnh báo của lượt đầy đủ gần nhất (vd. Sheet đang công khai)', async () => {
+    const { src, sync, t } = setup();
+    src.publicBySheet[SHEET_TIH] = true;
+    const full = await sync({ trigger: 'cron' });
+    t.now += 60_000;
+    const r = await sync({ trigger: 'webhook' });
+    assert.equal(r.skipped, 'unchanged');
+    assert.deepEqual(r.warnings, full.warnings);
+    assert.ok(r.warnings.some(w => /Bất kỳ ai có đường liên kết/.test(w)));
+  });
+
+  test('force (CRON_SECRET) không bỏ qua và không lưu dấu vân tay', async () => {
+    const { store, sync, t } = setup();
+    await sync({ trigger: 'cron' });
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'cron', force: true })).skipped, undefined);
+    assert.equal((await store.get(PATHS.state)).inputFp, '');
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, undefined, 'sau force: lượt thường chạy đầy đủ một lần');
+    t.now += 60_000;
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged');
+  });
+});
+
+/* =====================================================================
  * runSync – giới hạn tần suất và khóa (như v1, dưới v2_config)
  * ===================================================================== */
 describe('runSync v2 – giới hạn tần suất và khóa', () => {
   test('người dùng bấm lại < 60 s → {ok:true, skipped:"recent"}, không ghi gì; cron/webhook không bị giới hạn', async () => {
-    const { store, sync, t } = setup();
+    const { store, src, sync, t } = setup();
     await sync({ trigger: 'cron' });
     store.clearLog();
     t.now += 30_000;
@@ -490,8 +675,9 @@ describe('runSync v2 – giới hạn tần suất và khóa', () => {
     assert.deepEqual([r.ok, r.skipped, r.count, r.retryAfterMs], [true, 'recent', 18, 30_000]);
     assert.deepEqual(paths(store), []);
     assert.equal((await sync({ trigger: 'cron' })).skipped, undefined);
-    assert.equal((await sync({ trigger: 'webhook' })).skipped, undefined);
+    assert.equal((await sync({ trigger: 'webhook' })).skipped, 'unchanged', 'webhook không bị giới hạn tần suất (Sheet không đổi → bỏ qua)');
     t.now += 60_001;
+    src.tables[SHEET_TIH][FORM_TAB].rows.push(tihDefaultRow(12)); // có phiếu mới → chạy đầy đủ
     const r2 = await sync({ trigger: `user:gv@${DOMAIN}` });
     assert.deepEqual([r2.ok, r2.skipped], [true, undefined]);
     assert.equal((await store.get(PATHS.meta)).trigger, 'user', 'meta (mọi người có quyền đều đọc) không chứa email người bấm đồng bộ');
@@ -516,8 +702,8 @@ describe('runSync v2 – giới hạn tần suất và khóa', () => {
     await new Promise(res => setImmediate(res));
     assert.equal((await store.get(PATHS.lock)).until, T0 + LOCK_TTL_MS);
     src.tables[SHEET_TIH][FORM_TAB].rows.push(tihDefaultRow(12));
+    src.gate = null; // chỉ lượt đầu bị chặn khi đọc Sheet; lượt chen ngang đọc Sheet xong rồi mới xin khóa
     assert.equal((await sync({ trigger: 'webhook' })).skipped, 'locked');
-    src.gate = null;
     open();
     const r = await first;
     assert.deepEqual([r.ok, r.runs, r.levels.tih.count], [true, 2, 13]);

@@ -115,11 +115,15 @@ async function main() {
   const { levels, access, people, scopes } = r._internal;
   const st = r.debug.stats;
 
-  // Lần 2 với cùng dữ liệu: chỉ được ghi meta + trạng thái (kiểm tra tính lũy đẳng).
+  // Lần 2 với cùng dữ liệu, chạy ĐẦY ĐỦ (như cron): chỉ được ghi meta + trạng thái (kiểm tra tính lũy đẳng).
   store.clearLog();
-  const r2 = await runSync({ store, fetchTable: fetchSheet, env, trigger: 'dry-run' });
+  const r2 = await runSync({ store, fetchTable: fetchSheet, env, trigger: 'cron' });
   const bigCommit = store.maxCommitBytes;
   const writes2 = store.writtenPaths();
+  // Lần 3 như Apps Script định kỳ: Sheet không đổi → phải bỏ qua (dấu vân tay ổn định trên dữ liệu thật), không ghi gì.
+  store.clearLog();
+  const r3 = await runSync({ store, fetchTable: fetchSheet, env, trigger: 'dry-run' });
+  const writes3 = store.writtenPaths();
 
   console.log('\n=== CẤP ===');
   for (const L of cfg.levels) {
@@ -203,6 +207,7 @@ async function main() {
   }
   console.log(`Ghi lượt 1          : ${r.scopesWritten} phạm vi, ${r.chunksWritten} khối, ${r.accessWritten} tài liệu quyền (${r.debug.batches} lô) trong ${r.durationMs} ms`);
   console.log(`Lượt 2 (không đổi)  : phạm vi ${r2.scopesWritten}, khối ${r2.chunksWritten}, quyền ${r2.accessWritten} → ghi: ${writes2.join(', ')}`);
+  console.log(`Lượt 3 (kiểm tra)   : ${r3.skipped === 'unchanged' ? 'bỏ qua – Sheet không đổi' : `KHÔNG bỏ qua (${r3.skipped || 'chạy đầy đủ'})`} → ghi: ${writes3.join(', ') || 'không có'}`);
   console.log(`Lô ghi lớn nhất     : ${kb(bigCommit)} (giới hạn của Firestore 10 MiB)`);
   console.log(`Thời gian tải       : ${timings.join(' · ')}`);
   const warns = [...new Set([...(r.warnings || []), ...(r2.warnings || [])])];
