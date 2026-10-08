@@ -412,6 +412,26 @@ tr:last-child td{border-bottom:0}
 .live.off .dot{background:#A3ADC2;animation:none}
 .hbtn:disabled{opacity:.6;cursor:progress}
 .user{display:inline-flex;align-items:center;gap:8px;min-width:0}
+/* Nút “Gửi phiếu dự giờ” (Google Form theo cấp) */
+.hbtn.hl{background:#fff;border-color:#fff;color:#1B2873;font-weight:600;text-decoration:none}
+.hbtn.hl:hover{background:#EEF0FB}
+.fmenu{position:relative;display:inline-flex}
+.fmenu>summary{list-style:none}
+.fmenu>summary::-webkit-details-marker{display:none}
+.fmenu>summary .chev{width:14px;height:14px;transition:transform .15s}
+.fmenu[open]>summary .chev{transform:rotate(180deg)}
+.fmenu-pop{position:absolute;right:0;top:calc(100% + 8px);min-width:240px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(20,24,49,.18);padding:6px;z-index:60}
+.fmenu-pop .fm-k{font-size:11.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding:8px 10px 6px}
+.fmenu-pop a{display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;color:var(--ink);text-decoration:none;font-size:14px;font-weight:500}
+.fmenu-pop a:hover,.fmenu-pop a:focus-visible{background:var(--surface-2);outline:none}
+.fmenu-pop a .ext,.gf .ext{width:14px;height:14px;margin-left:auto;color:var(--muted);flex:none}
+.gf-row{display:flex;gap:8px;flex-wrap:wrap}
+.gf{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font-size:14px;font-weight:500;text-decoration:none;flex:1 1 auto;white-space:nowrap}
+.gf:hover{background:var(--surface-2);border-color:var(--muted)}
+.gc-forms{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.gc-forms .gc-fk,.st-forms .gc-fk{font-size:12.5px;font-weight:600;color:var(--ink-2);margin:0 0 10px}
+.st-forms{margin-top:18px;text-align:left}
+@media (max-width:640px){.hbtn .hide-xs{display:none}}
 .uchip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px 0 4px;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);font-size:12.5px;max-width:230px;min-width:0}
 .uchip .ua{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#fff;color:#23328C;font-size:10.5px;font-weight:700;letter-spacing:.02em;flex:none}
 .uchip .un{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -672,6 +692,7 @@ tr.grp-row td small{font-weight:400;color:var(--muted);margin-left:6px}
         <option value="15" selected>Tự đồng bộ: 15 phút</option>
         <option value="30">Tự đồng bộ: 30 phút</option>
       </select>
+      <span id="formBox" hidden></span>
       <button class="hbtn" id="refreshBtn" title="Đồng bộ ngay từ Google Sheet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 4v5h-5"/></svg><span>Làm mới</span></button>
       <button class="hbtn" id="themeBtn" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <span class="user" id="userBox" hidden>
@@ -778,6 +799,12 @@ const FIREBASE_CONFIG = {
 const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/12.19.0';
 const CFG = {
   SCHOOL_DOMAIN: 'hoangmaistarschool.edu.vn',
+  // Google Form “Phiếu đánh giá giờ dạy” của từng cấp – nút “Gửi phiếu dự giờ” mở đúng form theo cấp của tài khoản.
+  FORM_URLS: {
+    tih: 'https://forms.gle/N4VCT6SCwDTbCMJE6',
+    thcs: 'https://forms.gle/RX7GBBdW7SfmUEL36',
+    thpt: 'https://forms.gle/DHzuR9N79H4iRayx5',
+  },
   MS_TENANT: 'af9ef20a-3158-43a0-a1ab-ad72a03eb4c5', // tenant Microsoft 365 của trường (thông tin công khai)
   SYNC_URL: '/api/sync',
   SYNC_MAX_CONTINUE: 12,        // số lượt gọi tiếp tối đa khi máy chủ báo đồng bộ dở dang (partial)
@@ -1066,7 +1093,8 @@ function showGate(mode, opt = {}) {
       <p class="gc-lead">Dùng tài khoản trường <b>@${esc(CFG.SCHOOL_DOMAIN)}</b></p>
       <button class="ms-btn" id="msBtn" type="button"${busy ? ' disabled aria-busy="true"' : ''}>${busy ? '<span class="spinner sm"></span>' : ICON.ms}<span>${busy ? 'Đang chờ Microsoft xác nhận…' : 'Đăng nhập bằng Microsoft 365'}</span></button>
       ${gateMsgHTML()}
-      <p class="gc-help">Cửa sổ đăng nhập của Microsoft sẽ mở ra: chọn tài khoản trường, nhập mật khẩu và xác thực như khi dùng Outlook hoặc Teams.</p>`;
+      <p class="gc-help">Cửa sổ đăng nhập của Microsoft sẽ mở ra: chọn tài khoản trường, nhập mật khẩu và xác thực như khi dùng Outlook hoặc Teams.</p>
+      ${CAPS.some(formUrl) ? `<div class="gc-forms"><p class="gc-fk">Gửi Phiếu đánh giá giờ dạy (Google Form) – chọn cấp:</p>${formLinksHTML()}</div>` : ''}`;
     if (!busy) $('#msBtn').addEventListener('click', signIn);
   } else if (mode === 'fatal') {
     card.innerHTML = `<div class="gc-ic">${ICON.alert}</div>
@@ -1388,7 +1416,42 @@ function roleText() {
   if (r.person) parts.push('Giáo viên');
   return parts.join(' · ');
 }
+/* ======================= Nút “Gửi phiếu dự giờ” (Google Form của từng cấp) ======================= */
+const formUrl = c => (CFG.FORM_URLS || {})[c] || '';
+const FORM_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6v3H9z"/><path d="M15 5h2a2 2 0 0 1 2 2v4"/><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M18.4 13.6a1.9 1.9 0 0 1 2.7 2.7L16 21.4l-3.4.8.8-3.4z"/></svg>';
+const EXT_ICON = '<svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+// Cấp của tài khoản theo vai trò (BGH liên cấp → cả 3 cấp). Chưa biết vai trò (chưa có quyền / chưa đăng nhập) → cả 3 cấp.
+function formCapsFor(acc) {
+  const r = acc?.roles || {};
+  const mine = r.bghAll ? CAPS : [...(r.bghCaps || []), ...(r.toTruong || []).map(t => t.cap), ...(r.person?.caps || [])];
+  const caps = CAPS.filter(c => mine.includes(c) && formUrl(c));
+  return caps.length ? caps : CAPS.filter(formUrl);
+}
+const formTitle = c => `Mở Phiếu đánh giá giờ dạy – ${capLabel(c)} (Google Form, tab mới)`;
+// Dãy nút 3 cấp (màn hình đăng nhập / chưa có quyền)
+const formLinksHTML = (caps = CAPS.filter(formUrl)) => `<div class="gf-row">${caps.map(c => `<a class="gf" href="${esc(formUrl(c))}" target="_blank" rel="noopener noreferrer" title="${esc(formTitle(c))}">${capDot(c)}<span>${esc(capLabel(c))}</span>${EXT_ICON}</a>`).join('')}</div>`;
+function renderFormMenu() {
+  const box = $('#formBox');
+  if (!box) return;
+  const caps = formCapsFor(V2.acc);
+  box.hidden = !(S.email || LOCAL) || !caps.length;
+  if (box.hidden) { box.innerHTML = ''; return; }
+  const sig = caps.join(',');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const label = `${FORM_ICON}<span class="hide-xs">Gửi phiếu dự giờ</span>`;
+  box.innerHTML = caps.length === 1
+    ? `<a class="hbtn hl" href="${esc(formUrl(caps[0]))}" target="_blank" rel="noopener noreferrer" title="${esc(formTitle(caps[0]))}">${label}</a>`
+    : `<details class="fmenu"><summary class="hbtn hl" title="Gửi Phiếu đánh giá giờ dạy (Google Form) – chọn cấp">${label}<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary>
+        <div class="fmenu-pop" role="menu"><div class="fm-k">Phiếu đánh giá giờ dạy</div>${caps.map(c => `<a role="menuitem" href="${esc(formUrl(c))}" target="_blank" rel="noopener noreferrer" title="${esc(formTitle(c))}">${capDot(c)}<span>${esc(capLabel(c))}</span>${EXT_ICON}</a>`).join('')}</div></details>`;
+}
+document.addEventListener('click', e => {
+  for (const d of document.querySelectorAll('.fmenu[open]')) if (!d.contains(e.target) || e.target.closest('.fmenu-pop a')) d.open = false;
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') for (const d of document.querySelectorAll('.fmenu[open]')) d.open = false; });
+
 function renderSwitcher() {
+  renderFormMenu();
   const row = $('#vrow');
   if (!S.views.length || S.view !== 'app') { row.hidden = true; return; }
   row.hidden = false;
@@ -1563,7 +1626,7 @@ function bootError(title, msg, retry) {
   $('#retryBtn')?.addEventListener('click', () => { resetBoot(); retry(); });
 }
 // Thẻ trạng thái (thay cho nội dung dashboard) – #boot ẩn vì đây là trạng thái cuối, không phải đang tải.
-function stateCard({ icon = ICON.db, lb = '', title, text, help = '', sync = false, signOut = false }) {
+function stateCard({ icon = ICON.db, lb = '', title, text, help = '', sync = false, signOut = false, forms = false }) {
   hideSections();
   Object.assign(S, { ready: false, vidShown: null, loadedAt: null, lastSig: '' });
   $('#boot').hidden = true;
@@ -1571,7 +1634,8 @@ function stateCard({ icon = ICON.db, lb = '', title, text, help = '', sync = fal
   el.innerHTML = `<div class="card"><div class="boot-ic${lb ? ' lv' : ''}"${lb ? ` style="--lb:var(--b-${lb})"` : ''}>${icon}</div><h3>${esc(title)}</h3><p>${text}</p>
     ${sync || (signOut && !LOCAL) ? `<div class="acts">${sync && !LOCAL ? `<button class="btn pri" id="stSync" type="button">${ICON.sync}Đồng bộ ngay</button>` : ''}${signOut && !LOCAL ? `<button class="btn" id="stOut" type="button">${ICON.logout}Đăng xuất</button>` : ''}</div>` : ''}
     <div class="msg${S.syncMsg ? ' ' + S.syncMsg.kind : ''}" id="stMsg" role="status">${S.syncMsg ? esc(S.syncMsg.text) : ''}</div>
-    ${help ? `<p class="help">${help}</p>` : ''}</div>`;
+    ${help ? `<p class="help">${help}</p>` : ''}
+    ${forms && CAPS.some(formUrl) ? `<div class="st-forms"><p class="gc-fk">Gửi Phiếu đánh giá giờ dạy (Google Form):</p>${formLinksHTML()}</div>` : ''}</div>`;
   $('#stOut')?.addEventListener('click', doSignOut);
   $('#stSync')?.addEventListener('click', async e => {
     const btn = e.currentTarget, msg = $('#stMsg');
@@ -1595,7 +1659,7 @@ function showNoAccess() {
       help: 'Lệnh triển khai: npx firebase-tools deploy --only firestore:rules (xem README).' });
     return;
   }
-  stateCard({ icon: ICON.lock, title: 'Tài khoản chưa được cấp quyền / chưa có dữ liệu', sync: true, signOut: true,
+  stateCard({ icon: ICON.lock, title: 'Tài khoản chưa được cấp quyền / chưa có dữ liệu', sync: true, signOut: true, forms: true,
     text: `Tài khoản <b>${esc(S.email || '')}</b> chưa có quyền xem dashboard dự giờ, hoặc hệ thống chưa đồng bộ dữ liệu lần nào.`,
     help: 'Quyền xem được cấp tự động theo sheet “DS Nhân sự” của từng cấp (Ban Giám hiệu, tổ trưởng, giáo viên) và bảng “Phân quyền” của nhà trường. Nếu thầy cô vừa được bổ sung vào danh sách, bấm “Đồng bộ ngay” rồi chờ ít giây – trang sẽ tự mở khi có quyền. Nếu vẫn không được, vui lòng liên hệ quản trị hệ thống.' });
 }
@@ -1712,6 +1776,7 @@ function updateLive() {
 const safeSheetUrl = u => (typeof u === 'string' && /^https:\/\/docs\.google\.com\/spreadsheets\//.test(u) ? u : '');
 function renderUser(name, email, avatar) {
   $('#userBox').hidden = false;
+  renderFormMenu();
   $('#userChip').title = email;
   $('#userChip .ua').textContent = avatar || initials(name) || '?';
   $('#userChip .un').textContent = name;
