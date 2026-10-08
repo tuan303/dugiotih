@@ -354,10 +354,11 @@ tr:last-child td{border-bottom:0}
 .p-sec{margin-bottom:22px}
 .p-sec h4{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600}
 .facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-@media (max-width:640px){.facts{gap:8px}.fact{padding:9px 10px}}
+.facts.f4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .fact{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .fact .l{font-size:11.5px;color:var(--muted)}
 .fact .v{font-size:17px;font-weight:600;margin-top:2px;line-height:1.3}
+@media (max-width:640px){.facts{gap:8px}.fact{padding:9px 10px}.facts.f4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .meta{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:13px}
 .meta dt{color:var(--muted)}
 .meta dd{margin:0;font-weight:500}
@@ -805,6 +806,8 @@ const FIREBASE_CONFIG = {
 const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/12.19.0';
 const CFG = {
   SCHOOL_DOMAIN: 'hoangmaistarschool.edu.vn',
+  // Tạm ẩn “Tổng điểm” của phiếu (khung chi tiết, bảng phiếu, Tổng quan, hồ sơ GV, chân trang, file CSV) – đổi thành true để hiện lại.
+  SHOW_TOTAL: false,
   // Google Form “Phiếu đánh giá giờ dạy” của từng cấp – nút “Gửi phiếu dự giờ” mở đúng form theo cấp của tài khoản.
   FORM_URLS: {
     tih: 'https://forms.gle/N4VCT6SCwDTbCMJE6',
@@ -2104,7 +2107,7 @@ function renderFoot() {
   const caps = S.vkind === 'school' ? S.levels.filter(l => l.state === 'ready').map(l => l.cap) : S.vkind === 'person' ? (S.me?.caps || []) : [S.vcap || S.views.find(v => v.id === S.vid)?.cap].filter(Boolean);
   const src = caps.length > 1 ? `Google Sheet “Phiếu đánh giá giờ dạy” của ${caps.map(capLabel).join(', ')}` : `Google Sheet “Phiếu đánh giá giờ dạy”${caps[0] ? ` – ${capLabel(caps[0])}` : ''}`;
   const nCrit = S.crit.length;
-  $('#foot').innerHTML = `<span>Nguồn: ${esc(src)} · ${nf0.format(S.records.length)} phiếu${nCrit ? ` · ${nCrit} tiêu chí (tối đa ${nCrit * 5} điểm)` : ''}</span>
+  $('#foot').innerHTML = `<span>Nguồn: ${esc(src)} · ${nf0.format(S.records.length)} phiếu${nCrit ? ` · ${nCrit} tiêu chí${CFG.SHOW_TOTAL ? ` (tối đa ${nCrit * 5} điểm)` : ''}` : ''}</span>
   <span>${ms ? `Đồng bộ lần cuối: ${fmtD(new Date(ms))} ${fmtT(new Date(ms))}${m.trigger ? ` · ${esc(triggerLabel(m.trigger))}` : ''}` : 'Chưa rõ thời điểm đồng bộ'}</span>
   <span>Xếp loại theo điểm TB/tiêu chí: Tốt ≥ 4,5 · Khá ≥ 3,5 · Đạt ≥ 2,5 · Chưa đạt &lt; 2,5</span>`;
 }
@@ -2127,7 +2130,7 @@ function renderOverview(c) {
   <div class="kpis">
     ${kpi(ICON.doc, 'Tiết đã dự giờ', nf0.format(A.n), (B && deltaHTML(A.n, B.n)) || `${esc(PERIOD_LABEL[S.f.period])} · ${nf0.format(new Set(c.cur.map(r => r.tk)).size)} GV được dự`, true)}
     ${kpi(ICON.cal, 'Hôm nay', nf0.format(nToday) + '<small>tiết</small>', `Tuần này: <b>${nf0.format(wk.length)}</b> tiết`)}
-    ${kpi(ICON.star, 'Điểm trung bình', A.avg != null ? f2(A.avg) + '<small>/5</small>' : '–', A.n ? ((B && B.n && deltaHTML(A.avg, B.avg, { mode: 'abs' })) || (lvB?.avg != null ? `TB toàn cấp ${esc(capLabel(S.vcap))}: <b>${fB(lvB, lvB.avg)}</b>` : '') || `≈ ${nf1.format(A.total)}/${Math.round(A.max)} điểm mỗi phiếu`) : '')}
+    ${kpi(ICON.star, 'Điểm trung bình', A.avg != null ? f2(A.avg) + '<small>/5</small>' : '–', A.n ? ((B && B.n && deltaHTML(A.avg, B.avg, { mode: 'abs' })) || (lvB?.avg != null ? `TB toàn cấp ${esc(capLabel(S.vcap))}: <b>${fB(lvB, lvB.avg)}</b>` : '') || (CFG.SHOW_TOTAL ? `≈ ${nf1.format(A.total)}/${Math.round(A.max)} điểm mỗi phiếu` : '')) : '')}
     ${kpi(ICON.award, 'Tỷ lệ giờ dạy Tốt', tốt != null ? nf0.format(Math.round(tốt)) + '<small>%</small>' : '–', A.n ? (tốtP != null ? deltaHTML(tốt, tốtP, { mode: 'pp' }) : `${nf0.format(A.lv.tot)}/${nf0.format(A.n)} phiếu`) : '')}
     ${kpi(ICON.users, 'GV đã được dự giờ', S.staffOk ? `${nf0.format(cov.done)}<small>/${nf0.format(cov.total)}</small>` : nf0.format(new Set(c.cur.map(r => r.tk)).size), S.staffOk ? `Độ phủ <b>${pct(cov.done, cov.total)}</b> · còn ${nf0.format(cov.total - cov.done)} GV chưa dự` : 'Chưa đọc được DS nhân sự')}
     ${kpi(ICON.eye, 'Lượt BGH dự giờ', nf0.format(bgh), (B && deltaHTML(bgh, bghP)) || `Chiếm ${pct(bgh, A.n)} tổng số tiết`)}
@@ -2336,13 +2339,13 @@ function renderLog(c) {
   const pg = list.slice(S.logPage * CFG.LOG_PAGE_SIZE, (S.logPage + 1) * CFG.LOG_PAGE_SIZE);
   v.innerHTML = `<div class="card"><div class="card-hd"><div><h2>Nhật ký phiếu đánh giá</h2><p>${nf0.format(list.length)} phiếu · mới nhất ở trên · bấm vào phiếu để xem đầy đủ ${S.crit.length} tiêu chí và nhận xét</p></div>
     <div class="act"><div class="mini-seg" id="logMode"><button data-w="0" aria-pressed="${!watchOnly}">Tất cả</button><button data-w="1" aria-pressed="${watchOnly}">Cần quan tâm</button></div><button class="btn" id="expL">${ICON.dl}Xuất CSV</button></div></div>
-    ${pg.length ? `<div class="tbl-wrap"><table><thead><tr><th>Gửi lúc</th><th>Ngày dạy</th><th>Giáo viên dạy</th><th>Môn · Lớp · Tiết</th><th>Bài dạy</th><th>Người dự</th><th class="r">Tổng</th><th class="r">Xếp loại</th></tr></thead><tbody>
-    ${pg.map(r => `<tr class="click" data-rec="${esc(r.id)}"><td class="num" style="white-space:nowrap">${fmtDM(r.ts)} ${fmtT(r.ts)}${S.newIds.has(r.id) ? '<span class="newb">MỚI</span>' : ''}</td><td class="num">${fmtD(r.day)}</td><td><div class="tn">${esc(r.tn)}</div><div class="ts">${esc(r.tg)}</div></td><td>${esc(r.subject)}<div class="ts">Lớp ${esc(r.cls)} · ${esc(r.period)}</div></td><td style="max-width:240px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.lesson)}</div></td><td>${esc(r.on)}<div class="ts">${esc(r.og)}</div></td><td class="r num score">${nf0.format(r.total)}<span class="ts">/${r.max}</span></td><td class="r">${lvChip(r.level, r.avg)}${r.lowCodes.length ? `<div class="flag" style="justify-content:flex-end;margin-top:3px">${ICON.alert}${r.lowCodes.length} tiêu chí ≤ ${LOW_SCORE}</div>` : ''}</td></tr>`).join('')}
+    ${pg.length ? `<div class="tbl-wrap"><table><thead><tr><th>Gửi lúc</th><th>Ngày dạy</th><th>Giáo viên dạy</th><th>Môn · Lớp · Tiết</th><th>Bài dạy</th><th>Người dự</th>${CFG.SHOW_TOTAL ? '<th class="r">Tổng</th>' : ''}<th class="r">Xếp loại</th></tr></thead><tbody>
+    ${pg.map(r => `<tr class="click" data-rec="${esc(r.id)}"><td class="num" style="white-space:nowrap">${fmtDM(r.ts)} ${fmtT(r.ts)}${S.newIds.has(r.id) ? '<span class="newb">MỚI</span>' : ''}</td><td class="num">${fmtD(r.day)}</td><td><div class="tn">${esc(r.tn)}</div><div class="ts">${esc(r.tg)}</div></td><td>${esc(r.subject)}<div class="ts">Lớp ${esc(r.cls)} · ${esc(r.period)}</div></td><td style="max-width:240px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.lesson)}</div></td><td>${esc(r.on)}<div class="ts">${esc(r.og)}</div></td>${CFG.SHOW_TOTAL ? `<td class="r num score">${nf0.format(r.total)}<span class="ts">/${r.max}</span></td>` : ''}<td class="r">${lvChip(r.level, r.avg)}${r.lowCodes.length ? `<div class="flag" style="justify-content:flex-end;margin-top:3px">${ICON.alert}${r.lowCodes.length} tiêu chí ≤ ${LOW_SCORE}</div>` : ''}</td></tr>`).join('')}
     </tbody></table></div>
     <div class="pager"><span>Trang ${S.logPage + 1}/${pages} · hiển thị ${S.logPage * CFG.LOG_PAGE_SIZE + 1}–${S.logPage * CFG.LOG_PAGE_SIZE + pg.length} / ${nf0.format(list.length)}</span><div class="pg"><button class="btn" data-pg="-1" ${S.logPage === 0 ? 'disabled' : ''}>‹ Trước</button><button class="btn" data-pg="1" ${S.logPage >= pages - 1 ? 'disabled' : ''}>Sau ›</button></div></div>` : emptyHTML()}</div>`;
   $('#expL')?.addEventListener('click', () => downloadCSV(`nhat-ky-du-gio_${toISO(c.R.a)}_${toISO(c.R.b)}.csv`,
-    [['Gửi lúc', 'Ngày dạy', 'GV dạy', 'Tổ GV dạy', 'Môn', 'Lớp', 'Tiết', 'Bài dạy', 'Người dự', 'Tổ người dự', ...S.crit.map(k => k.code), 'Tổng điểm', 'Điểm TB', 'Xếp loại', 'Ưu điểm', 'Cần khắc phục'],
-    ...list.map(r => [`${fmtD(r.ts)} ${fmtT(r.ts)}`, fmtD(r.day), r.tn, r.tg, r.subject, r.cls, r.period, r.lesson, r.on, r.og, ...r.scores, r.total, r.avg.toFixed(2), LVMAP[r.level].name, r.pros, r.cons])]));
+    [['Gửi lúc', 'Ngày dạy', 'GV dạy', 'Tổ GV dạy', 'Môn', 'Lớp', 'Tiết', 'Bài dạy', 'Người dự', 'Tổ người dự', ...S.crit.map(k => k.code), ...(CFG.SHOW_TOTAL ? ['Tổng điểm'] : []), 'Điểm TB', 'Xếp loại', 'Ưu điểm', 'Cần khắc phục'],
+    ...list.map(r => [`${fmtD(r.ts)} ${fmtT(r.ts)}`, fmtD(r.day), r.tn, r.tg, r.subject, r.cls, r.period, r.lesson, r.on, r.og, ...r.scores, ...(CFG.SHOW_TOTAL ? [r.total] : []), r.avg.toFixed(2), LVMAP[r.level].name, r.pros, r.cons])]));
 }
 
 /* ---------- Biểu đồ nhiều cấp ---------- */
@@ -2578,12 +2581,12 @@ function renderMe(c) {
   const les = (S.meAll ? lesAll : lesAll.slice(0, LES_N)).map(r => `<div class="les" data-rec="${esc(r.id)}" role="button" tabindex="0">
       <div class="top"><div><div class="ls">${capTag(r)}${esc(r.lesson || 'Không ghi tên bài')}</div><div class="mt">${WD[r.day.getDay()]}, ${fmtD(r.day)} · ${esc(r.subject)} · Lớp ${esc(r.cls)} · ${esc(r.period)} · Người dự: ${esc(r.on)}${r.isBGH ? ' (BGH)' : ''}</div></div>${lvChip(r.level, r.avg)}</div>
       <div class="notes"><div class="note pos"><div class="h">Ưu điểm</div>${trivial(r.pros) ? '<span class="ts">Không ghi nhận</span>' : esc(r.pros)}</div><div class="note neg"><div class="h">Cần khắc phục</div>${trivial(r.cons) ? '<span class="ts">Không có</span>' : esc(r.cons)}</div></div></div>`).join('');
-  const obsRows = o.map(r => `<tr class="click" data-rec="${esc(r.id)}"><td class="num" style="white-space:nowrap">${fmtD(r.day)}<div class="ts">gửi ${fmtDM(r.ts)} ${fmtT(r.ts)}</div></td><td><div class="tn">${esc(r.tn)}</div><div class="ts">${capTag(r)}${esc(r.tg)}</div></td><td>${esc(r.subject)}<div class="ts">Lớp ${esc(r.cls)} · ${esc(r.period)}</div></td><td style="max-width:280px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.lesson)}</div></td><td class="r num score">${nf0.format(r.total)}<span class="ts">/${r.max}</span></td><td class="r">${lvChip(r.level, r.avg)}</td></tr>`).join('');
+  const obsRows = o.map(r => `<tr class="click" data-rec="${esc(r.id)}"><td class="num" style="white-space:nowrap">${fmtD(r.day)}<div class="ts">gửi ${fmtDM(r.ts)} ${fmtT(r.ts)}</div></td><td><div class="tn">${esc(r.tn)}</div><div class="ts">${capTag(r)}${esc(r.tg)}</div></td><td>${esc(r.subject)}<div class="ts">Lớp ${esc(r.cls)} · ${esc(r.period)}</div></td><td style="max-width:280px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.lesson)}</div></td>${CFG.SHOW_TOTAL ? `<td class="r num score">${nf0.format(r.total)}<span class="ts">/${r.max}</span></td>` : ''}<td class="r">${lvChip(r.level, r.avg)}</td></tr>`).join('');
 
   v.innerHTML = `${hero}${capSw ? `<div class="me-capbar"><span>So sánh với số liệu đối sánh của cấp:</span>${capSw}</div>` : ''}
   <div class="kpis k5">
     ${kpi(ICON.doc, 'Tiết được dự giờ', nf0.format(A.n), (B && deltaHTML(A.n, B.n)) || `Tổng cộng: <b>${nf0.format(tAll.length)}</b> tiết`, true)}
-    ${kpi(ICON.star, 'Điểm trung bình', A.avg != null ? f2(A.avg) + '<small>/5</small>' : '–', benchAvg || (A.n ? `≈ ${nf1.format(A.total)}/${Math.round(A.max)} điểm mỗi phiếu` : ''))}
+    ${kpi(ICON.star, 'Điểm trung bình', A.avg != null ? f2(A.avg) + '<small>/5</small>' : '–', benchAvg || (CFG.SHOW_TOTAL && A.n ? `≈ ${nf1.format(A.total)}/${Math.round(A.max)} điểm mỗi phiếu` : ''))}
     ${kpi(ICON.award, 'Xếp loại trung bình', myLv ? lvChip(myLv) : '–', A.n ? `Tốt ${A.lv.tot} · Khá ${A.lv.kha} · Đạt ${A.lv.dat} · Chưa đạt ${A.lv.chua}` : 'Chưa có tiết trong kỳ')}
     ${kpi(ICON.check, 'Tỷ lệ giờ dạy Tốt', A.n ? nf0.format(Math.round(pctN(A.lv.tot, A.n))) + '<small>%</small>' : '–', bTot != null ? `${esc(bTotB === bT ? tName : lName)}: <b>${bTot}</b>` : (A.n ? `${A.lv.tot}/${A.n} tiết` : ''))}
     ${kpi(ICON.eye, 'Phiếu tôi đã dự', nf0.format(o.length), `Tuần này: <b>${nf0.format(oWeek)}</b> · tổng ${nf0.format(oAll)}`)}
@@ -2599,14 +2602,14 @@ function renderMe(c) {
     <div class="card s12"><div class="card-hd"><div><h2>Các tiết tôi được dự giờ</h2><p>${nf0.format(t.length)} tiết trong kỳ · nhận xét đầy đủ của người dự · bấm để xem điểm từng tiêu chí</p></div>${t.length ? `<div class="act"><button class="btn" id="expMeT">${ICON.dl}Xuất CSV</button></div>` : ''}</div>
       ${les ? `<div class="les-list">${les}</div>${lesAll.length > LES_N ? `<div class="more"><button class="btn" type="button" id="meMore">${S.meAll ? 'Thu gọn' : `Xem tất cả ${nf0.format(lesAll.length)} tiết`}</button></div>` : ''}` : emptyHTML('Chưa có tiết nào của thầy/cô được dự giờ trong kỳ này.')}</div>
     <div class="card s12"><div class="card-hd"><div><h2>Phiếu tôi đã dự</h2><p>${nf0.format(o.length)} phiếu trong kỳ · các tiết thầy/cô đi dự và đã gửi phiếu đánh giá</p></div>${o.length ? `<div class="act"><button class="btn" id="expMeO">${ICON.dl}Xuất CSV</button></div>` : ''}</div>
-      ${obsRows ? `<div class="tbl-wrap"><table><thead><tr><th>Ngày dạy</th><th>Giáo viên được dự</th><th>Môn · Lớp · Tiết</th><th>Bài dạy</th><th class="r">Tổng</th><th class="r">Xếp loại</th></tr></thead><tbody>${obsRows}</tbody></table></div>` : emptyHTML('Thầy/cô chưa gửi phiếu dự giờ nào trong kỳ này.')}</div>
+      ${obsRows ? `<div class="tbl-wrap"><table><thead><tr><th>Ngày dạy</th><th>Giáo viên được dự</th><th>Môn · Lớp · Tiết</th><th>Bài dạy</th>${CFG.SHOW_TOTAL ? '<th class="r">Tổng</th>' : ''}<th class="r">Xếp loại</th></tr></thead><tbody>${obsRows}</tbody></table></div>` : emptyHTML('Thầy/cô chưa gửi phiếu dự giờ nào trong kỳ này.')}</div>
   </div>`;
 
   lineChart($('#chMe'), t.map(r => ({ label: fmtDM(r.day), v: r.avg, tip: `<b>${esc(fmtD(r.day))} · ${esc(r.subject)} · Lớp ${esc(r.cls)}</b><br>${esc(r.lesson)}<br>TB ${f2(r.avg)} · ${LVMAP[r.level].name}<br><span class="tm">Người dự: ${esc(r.on)}</span>` })),
     { aria: 'Điểm các tiết được dự giờ', refs: bT?.avg != null ? [{ v: bT.avg, label: `TB ${tName}`, fmt: v => fB(bT, v) }] : [] });
   v.querySelectorAll('[data-mecap]').forEach(b => b.addEventListener('click', () => { S.meCap = b.dataset.mecap; renderAll(); }));
-  const csvRows = list => list.map(r => [`${fmtD(r.ts)} ${fmtT(r.ts)}`, fmtD(r.day), capLabel(r.cap), r.tn, r.tg, r.subject, r.cls, r.period, r.lesson, r.on, r.og, ...r.scores, r.total, r.avg.toFixed(2), LVMAP[r.level].name, r.pros, r.cons]);
-  const hdr = [['Gửi lúc', 'Ngày dạy', 'Cấp', 'GV dạy', 'Tổ GV dạy', 'Môn', 'Lớp', 'Tiết', 'Bài dạy', 'Người dự', 'Tổ người dự', ...crit.map(k => k.code), 'Tổng điểm', 'Điểm TB', 'Xếp loại', 'Ưu điểm', 'Cần khắc phục']];
+  const csvRows = list => list.map(r => [`${fmtD(r.ts)} ${fmtT(r.ts)}`, fmtD(r.day), capLabel(r.cap), r.tn, r.tg, r.subject, r.cls, r.period, r.lesson, r.on, r.og, ...r.scores, ...(CFG.SHOW_TOTAL ? [r.total] : []), r.avg.toFixed(2), LVMAP[r.level].name, r.pros, r.cons]);
+  const hdr = [['Gửi lúc', 'Ngày dạy', 'Cấp', 'GV dạy', 'Tổ GV dạy', 'Môn', 'Lớp', 'Tiết', 'Bài dạy', 'Người dự', 'Tổ người dự', ...crit.map(k => k.code), ...(CFG.SHOW_TOTAL ? ['Tổng điểm'] : []), 'Điểm TB', 'Xếp loại', 'Ưu điểm', 'Cần khắc phục']];
   $('#meMore')?.addEventListener('click', () => { S.meAll = !S.meAll; renderAll(); });
   $('#expMeT')?.addEventListener('click', () => downloadCSV(`tiet-duoc-du-gio_${toISO(c.R.a)}_${toISO(c.R.b)}.csv`, [...hdr, ...csvRows(t.slice().sort((a, b) => b.ts - a.ts))]));
   $('#expMeO')?.addEventListener('click', () => downloadCSV(`phieu-da-du_${toISO(c.R.a)}_${toISO(c.R.b)}.csv`, [...hdr, ...csvRows(o)]));
@@ -2639,7 +2642,8 @@ function openRecord(id) {
     if (!ks.length) continue;
     crit += `<div class="dom-hd"><span>${ROMAN[d]}. ${DOMAINS[d]}</span><span>TB ${f2(r.dom[d])}</span></div><div class="sc-grid">${ks.map(k => `<div class="sc"><b>${k.code}</b><span>${esc(k.full)}</span><span class="pill p${Math.round(k.v ?? 0)}" title="${k.v ?? '–'} điểm">${k.v ?? '–'}</span></div>`).join('')}</div>`;
   }
-  const body = `<div class="p-sec"><div class="facts">
+  const body = `<div class="p-sec"><div class="facts${CFG.SHOW_TOTAL ? ' f4' : ''}">
+      ${CFG.SHOW_TOTAL ? `<div class="fact"><div class="l">Tổng điểm</div><div class="v num">${nf0.format(r.total)}<span class="ts">/${r.max}</span></div></div>` : ''}
       <div class="fact"><div class="l">Điểm TB</div><div class="v num">${f2(r.avg)}</div></div>
       <div class="fact"><div class="l">Xếp loại</div><div class="v">${lvChip(r.level)}</div></div>
       <div class="fact"><div class="l">Tiêu chí ≤ ${LOW_SCORE}đ</div><div class="v num" style="color:${r.lowCodes.length ? 'var(--down)' : 'inherit'}">${r.lowCodes.length}</div></div></div></div>
