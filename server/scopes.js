@@ -12,7 +12,7 @@
 //  • số liệu đối sánh (điểm TB tổ/cấp) là số gộp, làm tròn, chỉ tính các tuần ĐÃ KẾT THÚC và chỉ được công bố lại khi nhóm có
 //    thêm ≥ BENCH_RULES.minNewRecords phiếu của ≥ BENCH_RULES.minNewTeachers giáo viên (xem publishBenchmarks) – để không ai
 //    lấy hiệu hai lần công bố liên tiếp mà suy ra điểm của MỘT tiết dạy; nhóm có < 3 giáo viên được dự thì không công bố.
-import { CAPS, CAP_INFO, TO_BGH, TO_OTHER, fold, nameKey, hash53, slug, levelOf, chunkRecords, SCHOOL_YEAR_START_MONTH } from '../lib/shared.js';
+import { CAPS, CAP_INFO, TO_BGH, TO_OTHER, fold, nameKey, hash53, slug, LEVELS, LEVELS_SIG, levelOf, chunkRecords, SCHOOL_YEAR_START_MONTH } from '../lib/shared.js';
 
 // chunkRecords đo độ dài theo đơn vị UTF-16; mỗi đơn vị ≤ 3 byte UTF-8 → 340 000 × 3 < 1 MiB (giới hạn tài liệu Firestore).
 export const CHUNK_OPTS = Object.freeze({ maxBytes: 340_000, maxRecords: 500 });
@@ -191,7 +191,7 @@ const teacherKeyOf = r => (r.tp ? '#' + r.tp : fold(r.tn));
 
 /**
  * Điểm TB gộp (CHÍNH XÁC) của một nhóm phiếu (cùng một cấp → cùng crit). Dùng nội bộ; số công bố đi qua coarseBench().
- * @returns {{n, teachers, avg, dom:{1..5}, crit:number[], dist:{tot,kha,dat,chua}} | {n, teachers, suppressed:true}}
+ * @returns {{n, teachers, avg, dom:{1..5}, crit:number[], dist:{tot,dat,chua,nguy}} | {n, teachers, suppressed:true}}  (dist: khóa theo LEVELS)
  */
 export function benchmark(records, crit, minTeachers = BENCH_RULES.minTeachers, keyOf = teacherKeyOf) {
   const recs = records.filter(r => (r.sc || []).some(v => v != null));
@@ -203,7 +203,7 @@ export function benchmark(records, crit, minTeachers = BENCH_RULES.minTeachers, 
     const cols = crit.map((k, j) => (k.d === d ? j : -1)).filter(j => j >= 0);
     dom[d] = r3(mean(recs.map(r => mean(cols.map(j => r.sc[j]).filter(v => v != null))).filter(v => v != null)));
   }
-  const dist = { tot: 0, kha: 0, dat: 0, chua: 0 };
+  const dist = Object.fromEntries(LEVELS.map(l => [l.key, 0]));
   const avgs = recs.map(recAvg);
   for (const a of avgs) dist[levelOf(a)]++;
   return {
@@ -226,7 +226,7 @@ export function coarseBench(b, rules = BENCH_RULES) {
   const pc = k => Math.round((100 * b.dist[k]) / b.n / rules.pctStep) * rules.pctStep;
   const dom = {};
   for (const [d, v] of Object.entries(b.dom)) dom[d] = rd(v);
-  return { n: b.n, teachers: b.teachers, avg: rd(b.avg), dom, crit: b.crit.map(rd), pct: { tot: pc('tot'), kha: pc('kha'), dat: pc('dat'), chua: pc('chua') } };
+  return { n: b.n, teachers: b.teachers, avg: rd(b.avg), dom, crit: b.crit.map(rd), pct: Object.fromEntries(LEVELS.map(l => [l.key, pc(l.key)])) };
 }
 
 /**
@@ -254,7 +254,8 @@ export const benchGroupId = (cap, to = '') => (to ? `T|${cap}|${to}` : `L|${cap}
  *  • nhóm chưa đủ điều kiện (bị ẩn) → tính lại mỗi tuần; năm học mới / bộ tiêu chí đổi → tính lại từ đầu.
  * @param {object} p
  * @param {{id:string, records:object[], crit:object[]}[]} p.groups
- * @param {Record<string, {at:string, sy:number, nc:number, b:object}>} [p.prev]  trạng thái lần trước (v2_config/state.bench)
+ * @param {Record<string, {at:string, sy:number, nc:number, lv:string, b:object}>} [p.prev]  trạng thái lần trước (v2_config/state.bench);
+ *   lv = LEVELS_SIG lúc chốt – khác thang hiện tại → tính lại
  * @param {{at:string, sy:number, syStart:string}} p.cutoff
  * @returns {{ bench: Record<string, object>, state: Record<string, object> }}  bench[id] = coarseBench(…) + { asOf, sy }
  */
@@ -263,7 +264,8 @@ export function publishBenchmarks({ groups, prev = {}, cutoff = ALL_TIME, rules 
   for (const g of groups) {
     const closed = g.records.filter(r => r.ts < cutoff.at && (!cutoff.syStart || r.day >= cutoff.syStart));
     const p = prev[g.id];
-    const usable = p && p.b && !p.b.suppressed && p.sy === cutoff.sy && p.nc === g.crit.length && p.at <= cutoff.at;
+    // lv: thang xếp loại lúc chốt – thang đổi thì tỷ lệ xếp loại cũ không còn đúng → tính lại.
+    const usable = p && p.b && !p.b.suppressed && p.sy === cutoff.sy && p.nc === g.crit.length && p.lv === LEVELS_SIG && p.at <= cutoff.at;
     let rec = null;
     if (usable && p.at === cutoff.at) rec = p;
     else if (usable) {
@@ -271,7 +273,7 @@ export function publishBenchmarks({ groups, prev = {}, cutoff = ALL_TIME, rules 
       const enough = fresh.length >= rules.minNewRecords && new Set(fresh.map(teacherKeyOf)).size >= rules.minNewTeachers;
       rec = enough ? null : p;
     }
-    if (!rec) rec = { at: cutoff.at, sy: cutoff.sy, nc: g.crit.length, b: coarseBench(benchmark(closed, g.crit, rules.minTeachers), rules) };
+    if (!rec) rec = { at: cutoff.at, sy: cutoff.sy, nc: g.crit.length, lv: LEVELS_SIG, b: coarseBench(benchmark(closed, g.crit, rules.minTeachers), rules) };
     state[g.id] = rec;
     bench[g.id] = { ...rec.b, asOf: rec.at === ALL_TIME.at ? '' : rec.at.slice(0, 10), sy: rec.sy || null };
   }

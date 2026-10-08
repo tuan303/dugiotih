@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   parseFormTable, parseStaffTable, normTo, toRule, normGroup, parseCaps, normMa, emailsIn, normEmail, isLeaveNote,
   staffRoleFlags, hydrate, hash53, fold, nameKey, slug, CAPS, CAP_INFO, TO_BGH, TO_TG, chunkRecords,
+  LEVELS, LEVELS_SIG, levelOf, levelName,
 } from '../lib/shared.js';
 import {
   TIH_FORM_COLS, THCS_FORM_COLS, tihRow, thcsRow, tihStaffTable, thcsStaffTable, em, DOMAIN,
@@ -249,5 +250,31 @@ describe('Tiện ích', () => {
     assert.deepEqual(ch.map(c => c.n), [500, 500, 200]);
     assert.deepEqual(ch.map(c => c.id), ['c000', 'c001', 'c002']);
     assert.equal(ch[0].hash, hash53(ch[0].data));
+  });
+});
+
+describe('Thang xếp loại (Tốt ≥ 4,2 · Đạt ≥ 3,4 · Chưa đạt ≥ 2,6 · Nguy hiểm < 2,6)', () => {
+  test('bốn mức theo đúng thứ tự, tên tiếng Việt', () => {
+    assert.deepEqual(LEVELS.map(l => [l.key, l.name]), [['tot', 'Tốt'], ['dat', 'Đạt'], ['chua', 'Chưa đạt'], ['nguy', 'Nguy hiểm']]);
+    assert.equal(LEVELS_SIG, 'tot4.2,dat3.4,chua2.6,nguy');
+    assert.equal(levelName('nguy'), 'Nguy hiểm');
+  });
+  test('ranh giới: “từ” là gồm, “dưới” là không gồm', () => {
+    const cases = [[5, 'tot'], [4.2, 'tot'], [4.19, 'dat'], [3.4, 'dat'], [3.39, 'chua'], [2.6, 'chua'], [2.59, 'nguy'], [1, 'nguy'], [0, 'nguy']];
+    for (const [v, k] of cases) assert.equal(levelOf(v), k, `TB ${v}`);
+  });
+  test('trung bình phiếu 24 tiêu chí (số lẻ dấu phẩy động)', () => {
+    assert.equal(levelOf(101 / 24), 'tot'); // 4,21
+    assert.equal(levelOf(100 / 24), 'dat'); // 4,17
+    assert.equal(levelOf(82 / 24), 'dat'); //  3,42
+    assert.equal(levelOf(81 / 24), 'chua'); // 3,38
+    assert.equal(levelOf(63 / 24), 'chua'); // 2,63
+    assert.equal(levelOf(62 / 24), 'nguy'); // 2,58
+    assert.equal(levelOf((4.2 * 3 + 4.2 * 4) / 7), 'tot', 'sai số cộng dồn quanh 4,2 vẫn là Tốt');
+  });
+  test('so trên số làm tròn 2 chữ số như đang hiển thị: 4,1999 (hiện “4,20”) → Tốt; 4,194 (hiện “4,19”) → Đạt', () => {
+    assert.equal(levelOf(4.1999), 'tot');
+    assert.equal(levelOf(4.194), 'dat');
+    assert.equal(levelOf(2.5999), 'chua');
   });
 });

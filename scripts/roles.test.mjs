@@ -3,7 +3,7 @@
 // BGH cấp chỉ thấy cấp mình, phạm vi cá nhân không lộ email/mã của người khác.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFormTable, parseStaffTable, fold, nameKey, TO_BGH } from '../lib/shared.js';
+import { parseFormTable, parseStaffTable, fold, nameKey, TO_BGH, LEVELS, LEVELS_SIG } from '../lib/shared.js';
 import { resolveAccess, parseRolesTable, parseRoleName } from '../server/roles.js';
 import {
   buildScopes, benchmark, makeMatcher, personRecord, MIN_BENCH_TEACHERS, levelStaff, scopeIdTo, effectiveTo,
@@ -340,7 +340,7 @@ describe('Phạm vi – nội dung và quyền riêng tư', () => {
     assert.deepEqual([b.n, b.teachers, b.avg], [3, 3, 3.667]);
     assert.deepEqual(b.dom, { 1: 4, 2: null, 3: null, 4: null, 5: 3.5 });
     assert.deepEqual(b.crit, [4, 4, 3.5]);
-    assert.deepEqual(b.dist, { tot: 1, kha: 0, dat: 2, chua: 0 });
+    assert.deepEqual(b.dist, { tot: 1, dat: 0, chua: 2, nguy: 0 }, 'TB 5 → Tốt; TB 3 → Chưa đạt (2,6 – dưới 3,4)');
     assert.deepEqual(benchmark(recs.slice(0, 2), crit), { n: 2, teachers: 2, suppressed: true });
     assert.equal(MIN_BENCH_TEACHERS, 3);
   });
@@ -641,6 +641,16 @@ describe('Hồi quy – số liệu đối sánh không cho phép suy ra điểm
     assert.ok(!('dist' in b));
     assert.equal(b.asOf, '2026-09-28');
   });
+  test('đổi thang xếp loại → số liệu đã chốt theo thang cũ được tính lại ngay (không chờ phiếu mới)', () => {
+    const p1 = pub(base, {}, '2026-09-16');
+    assert.equal(p1.state.g.lv, LEVELS_SIG);
+    const old = { g: { ...p1.state.g, lv: undefined, b: { ...p1.state.g.b, pct: { tot: 100, kha: 0, dat: 0, chua: 0 } } } }; // trạng thái lưu từ bản cũ
+    const p2 = pub(base, old, '2026-09-23');
+    assert.equal(p2.state.g.lv, LEVELS_SIG);
+    assert.deepEqual(Object.keys(p2.bench.g.pct), LEVELS.map(l => l.key));
+    assert.equal(p2.bench.g.asOf, '2026-09-21', 'chốt lại ở mốc hiện tại');
+    assert.deepEqual(pub(base, p2.state, '2026-09-30').bench.g, p2.bench.g, 'sau đó giữ nguyên như thường');
+  });
   test('5 phiếu mới nhưng chỉ của 1–2 GV → chưa công bố lại', () => {
     const p1 = pub(base, {}, '2026-09-16');
     const same = [1, 2, 3, 4, 5].map(i => rec(W2, i % 2 ? 'B' : 'C', [i % 5 + 1, 3, 3]));
@@ -651,7 +661,7 @@ describe('Hồi quy – số liệu đối sánh không cho phép suy ra điểm
     assert.equal(p.bench.g.n, 6);
   });
   test('nhóm < 3 GV hoặc < 5 phiếu → không công bố điểm', () => {
-    assert.deepEqual(coarseBench({ n: 4, teachers: 3, avg: 4, dom: {}, crit: [], dist: { tot: 0, kha: 4, dat: 0, chua: 0 } }), { n: 4, teachers: 3, suppressed: true });
+    assert.deepEqual(coarseBench({ n: 4, teachers: 3, avg: 4, dom: {}, crit: [], dist: { tot: 0, dat: 4, chua: 0, nguy: 0 } }), { n: 4, teachers: 3, suppressed: true });
     const p = pub(base.slice(0, 2), {}, '2026-09-16');
     assert.equal(p.bench.g.suppressed, true);
     assert.equal(BENCH_RULES.minRecords, 5);

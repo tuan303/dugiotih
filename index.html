@@ -36,11 +36,12 @@
   --ink:#141831; --ink-2:#4A5070; --muted:#7D849E; --line:#E3E6EF; --grid:#ECEEF4; --axis:#C6CBDA;
   --brand:#D21235; --navy:#23328C; --hdr:#23328C; --hdr-2:#1B2873;
   --series:#2F44B5; --series-soft:rgba(47,68,181,.09);
-  /* Xếp loại (trạng thái) – bảng màu riêng, đã kiểm định (dataviz validate_palette.js) để KHÔNG trùng với màu nhận diện
-     3 cấp (vàng / xanh lá / xanh navy): Tốt = xanh mòng két, Khá = xanh da trời, Đạt = hồng, Chưa đạt = đỏ thẫm.
-     Luôn đi kèm nhãn chữ (chip, chú giải, tooltip). *-on: màu chữ trên nền trạng thái (≥ 4,5:1). */
-  --lv-tot:#0B90A2; --lv-kha:#07BFF4; --lv-dat:#DB509C; --lv-chua:#B3123E;
-  --lv-tot-on:#0C0F1D; --lv-kha-on:#0C0F1D; --lv-dat-on:#0C0F1D; --lv-chua-on:#FFFFFF; --lv-tot-ink:#02707E;
+  /* Xếp loại (trạng thái) theo thang của nhà trường: Tốt = xanh · Đạt = vàng · Chưa đạt = cam · Nguy hiểm = đỏ.
+     Đã kiểm định (dataviz validate_palette.js): các cặp liền kề phân biệt được cả với người mù màu; xanh ngả ngọc để
+     không lẫn với xanh lá THCS. Vàng luôn sáng (tương phản thấp trên nền trắng) → chấm có viền, luôn đi kèm nhãn chữ
+     (chip, chú giải, tooltip). *-on: màu chữ trên nền trạng thái (≥ 4,5:1); --lv-tot-ink: chữ màu Tốt trên nền thẻ. */
+  --lv-tot:#0E9F6E; --lv-dat:#E8C21A; --lv-chua:#EE6A10; --lv-nguy:#B8122E;
+  --lv-tot-on:#0C0F1D; --lv-dat-on:#0C0F1D; --lv-chua-on:#0C0F1D; --lv-nguy-on:#FFFFFF; --lv-tot-ink:#07774F;
   /* Màu nhận diện 3 cấp: b-* = màu thương hiệu (chấm, viền); c-* = màu chuỗi dữ liệu trên biểu đồ (đã kiểm định
      lightness/CVD trên nền sáng/tối, cùng sắc độ với màu thương hiệu). */
   --b-tih:#ffad00; --b-thcs:#2da037; --b-thpt:#23328C;
@@ -61,8 +62,8 @@
     --ink:#F1F3FA; --ink-2:#B8BDD2; --muted:#868DA8; --line:#272E4D; --grid:#20263F; --axis:#3A4268;
     --brand:#E8475F; --navy:#9AA6F2; --hdr:#141A3D; --hdr-2:#0F1431;
     --series:#6576E6; --series-soft:rgba(101,118,230,.14); --link:#8391F0;
-    --lv-tot:#3CA694; --lv-kha:#126F96; --lv-dat:#D852D0; --lv-chua:#CE3459;
-    --lv-tot-on:#0C0F1D; --lv-kha-on:#FFFFFF; --lv-dat-on:#0C0F1D; --lv-chua-on:#FFFFFF; --lv-tot-ink:#58C3B6;
+    --lv-tot:#1FAA7C; --lv-dat:#D9C431; --lv-chua:#E9721D; --lv-nguy:#CF2957;
+    --lv-tot-on:#0C0F1D; --lv-dat-on:#0C0F1D; --lv-chua-on:#0C0F1D; --lv-nguy-on:#FFFFFF; --lv-tot-ink:#4CCB9D;
     --c-tih:#C68405; --c-thcs:#0B7A1B; --c-thpt:#6582F2; --b-thpt:#5E74E0; --c-all:#E8334F;
     --acc-on:#0C0F1D;
     --up:#3CC27A; --down:#F06A7E; --warn-bg:#2A2414; --crit-bg:#2C1720;
@@ -76,8 +77,8 @@
   --ink:#F1F3FA; --ink-2:#B8BDD2; --muted:#868DA8; --line:#272E4D; --grid:#20263F; --axis:#3A4268;
   --brand:#E8475F; --navy:#9AA6F2; --hdr:#141A3D; --hdr-2:#0F1431;
   --series:#6576E6; --series-soft:rgba(101,118,230,.14); --link:#8391F0;
-  --lv-tot:#3CA694; --lv-kha:#126F96; --lv-dat:#D852D0; --lv-chua:#CE3459;
-  --lv-tot-on:#0C0F1D; --lv-kha-on:#FFFFFF; --lv-dat-on:#0C0F1D; --lv-chua-on:#FFFFFF; --lv-tot-ink:#58C3B6;
+  --lv-tot:#1FAA7C; --lv-dat:#D9C431; --lv-chua:#E9721D; --lv-nguy:#CF2957;
+  --lv-tot-on:#0C0F1D; --lv-dat-on:#0C0F1D; --lv-chua-on:#0C0F1D; --lv-nguy-on:#FFFFFF; --lv-tot-ink:#4CCB9D;
   --c-tih:#C68405; --c-thcs:#0B7A1B; --c-thpt:#6582F2; --b-thpt:#5E74E0; --c-all:#E8334F;
   --acc-on:#0C0F1D;
   --up:#3CC27A; --down:#F06A7E; --warn-bg:#2A2414; --crit-bg:#2C1720;
@@ -198,8 +199,8 @@ main{padding:20px 0 40px}
 
 /* Level chips */
 .lv{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 9px 2px 7px;border-radius:999px;background:var(--surface-3);color:var(--ink);white-space:nowrap}
-.lv::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
-.lv-tot{--c:var(--lv-tot)}.lv-kha{--c:var(--lv-kha)}.lv-dat{--c:var(--lv-dat)}.lv-chua{--c:var(--lv-chua)}
+.lv::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 1px rgba(12,15,29,.16)}
+.lv-tot{--c:var(--lv-tot)}.lv-dat{--c:var(--lv-dat)}.lv-chua{--c:var(--lv-chua)}.lv-nguy{--c:var(--lv-nguy)}
 .score{font-weight:600;font-variant-numeric:tabular-nums}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--ink-2)}
 .legend span{display:inline-flex;align-items:center;gap:6px}
@@ -367,10 +368,11 @@ tr:last-child td{border-bottom:0}
 .sc:nth-child(odd){background:var(--surface-2)}
 .sc b{color:var(--muted);font-weight:600;font-size:11.5px}
 .pill{display:inline-grid;place-items:center;width:28px;height:24px;border-radius:7px;font-weight:700;font-size:12.5px;color:var(--on,#fff);background:var(--c,var(--muted))}
-.p5{--c:var(--lv-tot);--on:var(--lv-tot-on)}.p4{--c:var(--lv-kha);--on:var(--lv-kha-on)}.p3{--c:var(--lv-dat);--on:var(--lv-dat-on)}.p2,.p1{--c:var(--lv-chua);--on:var(--lv-chua-on)}
+/* điểm từng tiêu chí theo cùng thang: 5 → Tốt · 4 → Đạt · 3 → Chưa đạt · ≤ 2 → Nguy hiểm */
+.p5{--c:var(--lv-tot);--on:var(--lv-tot-on)}.p4{--c:var(--lv-dat);--on:var(--lv-dat-on)}.p3{--c:var(--lv-chua);--on:var(--lv-chua-on)}.p2,.p1{--c:var(--lv-nguy);--on:var(--lv-nguy-on)}
 .note{border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.55;white-space:pre-wrap;border:1px solid var(--line);background:var(--surface-2)}
 .note.pos{border-left:3px solid var(--lv-tot)}
-.note.neg{border-left:3px solid var(--lv-dat)}
+.note.neg{border-left:3px solid var(--lv-chua)}
 .note .h{font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;white-space:normal}
 .tl{display:flex;flex-direction:column;gap:10px}
 .tl-item{border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;background:var(--surface)}
@@ -495,7 +497,7 @@ tr:last-child td{border-bottom:0}
 .gc-msg.err{background:var(--crit-bg);color:var(--down);border-color:transparent}
 .gc-msg.ok{color:var(--up)}
 .gc-help{margin:20px 0 0;padding-top:16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);line-height:1.6}
-.gc-ic{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;margin-bottom:16px;background:var(--warn-bg);color:var(--lv-dat)}
+.gc-ic{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;margin-bottom:16px;background:var(--warn-bg);color:var(--lv-chua)}
 .gc-ic svg{width:22px;height:22px}
 .gc-acts{display:flex;gap:10px;flex-wrap:wrap}
 .gbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:0 16px;border-radius:11px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:500;font-size:14px;cursor:pointer}
@@ -566,6 +568,7 @@ tr:last-child td{border-bottom:0}
 .state .msg.err{color:var(--down)}
 .state .msg.ok{color:var(--up)}
 .state .boot-ic.lv{background:color-mix(in srgb,var(--lb) 16%,transparent);color:var(--ink)}
+.state .boot-ic.lv::before{box-shadow:none}
 
 /* ================= v2: Toàn trường ================= */
 .lvcards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
@@ -791,7 +794,7 @@ tr.grp-row td small{font-weight:400;color:var(--muted);margin-left:6px}
  *  • Xem trước cục bộ: http://localhost:<cổng>/index.html?local&as=<bí danh> → đọc ./dev-data-v2.json (npm run dry-run),
  *    bỏ qua đăng nhập; <bí danh> là khóa trong dev-data-v2.json.users (admin, bgh_tih, to_thcs, gv_tih…).
  */
-import { LEVELS, LOW_SCORE, DOMAINS, CRIT_SHORT, levelOf, clean, fold, hydrate, hash53, slug } from './lib/shared.js';
+import { LEVELS, LOW_SCORE, DOMAINS, CRIT_SHORT, levelOf, clean, fold, hydrate, hash53, slug } from './lib/shared.js?v=20261008'; // ?v=: đổi khi sửa lib/shared.js để trình duyệt không dùng bản cũ trong bộ nhớ đệm
 
 /* ======================= CẤU HÌNH ======================= */
 // Cấu hình web của Firebase – công khai theo thiết kế (không phải bí mật; quyền truy cập do security rules quyết định).
@@ -901,6 +904,11 @@ const ICON = {
   ms: '<svg viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>',
 };
 const emptyHTML = (msg = 'Không có phiếu nào trong khoảng thời gian / bộ lọc đang chọn.') => `<div class="empty"><div>${ICON.inbox}${esc(msg)}</div></div>`;
+// Giờ dạy “cần quan tâm”: xếp loại Chưa đạt / Nguy hiểm (hoặc có tiêu chí ≤ LOW_SCORE – xét riêng).
+const WATCH_LV = new Set(['chua', 'nguy']);
+const lvWatch = r => WATCH_LV.has(r.level);
+const LV_SCALE_TXT = LEVELS.map((l, i) => i === 0 ? `${l.name} ${nf1.format(l.min)} – 5` : Number.isFinite(l.min)
+  ? `${l.name} ${nf1.format(l.min)} – dưới ${nf1.format(LEVELS[i - 1].min)}` : `${l.name} dưới ${nf1.format(LEVELS[i - 1].min)}`).join(' · ');
 const lvChip = (key, avg) => `<span class="lv lv-${key}">${LVMAP[key].name}${avg != null ? ' · ' + f2(avg) : ''}</span>`;
 
 /* ======================= Trạng thái ======================= */
@@ -1938,7 +1946,7 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); 
 
 /* ======================= Tổng hợp ======================= */
 function agg(list) {
-  const lv = { tot: 0, kha: 0, dat: 0, chua: 0 }; let s = 0, st = 0, sm = 0;
+  const lv = Object.fromEntries(LEVELS.map(l => [l.key, 0])); let s = 0, st = 0, sm = 0;
   list.forEach(r => { s += r.avg; st += r.total; sm += r.max; lv[r.level]++; });
   return { n: list.length, avg: list.length ? s / list.length : null, total: list.length ? st / list.length : null, max: list.length ? sm / list.length : null, lv };
 }
@@ -2046,8 +2054,8 @@ function lineChart(el, pts, { height = 230, aria = '', refs = [] } = {}) {
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}">`;
   for (let t = lo; t <= hi + 1e-9; t += step) { const y = Y(t); s += `<line class="grid-l" x1="${m.l}" x2="${W - m.r}" y1="${y}" y2="${y}"/><text class="tick" x="${m.l - 8}" y="${y + 4}" text-anchor="end">${nf2.format(t).replace(/0$/, '')}</text>`; }
   // Nhãn ngưỡng Tốt ở bên phải; chuyển sang trái nếu sát nhãn giá trị cuối. Nhãn đường tham chiếu tránh nhãn ngưỡng.
-  const tg = 4.5, tgLeft = Math.abs(Y(pts[pts.length - 1].v) - 10 - (Y(tg) - 5)) < 14;
-  if (tg > lo && tg < hi) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(tg)}" y2="${Y(tg)}" stroke="var(--lv-tot)" stroke-dasharray="4 4" stroke-width="1"/><text class="tick halo" x="${tgLeft ? m.l + 6 : W - m.r}" y="${Y(tg) - 5}" text-anchor="${tgLeft ? 'start' : 'end'}" style="fill:var(--lv-tot-ink)">Ngưỡng Tốt 4,5</text>`;
+  const tg = LVMAP.tot.min, tgLeft = Math.abs(Y(pts[pts.length - 1].v) - 10 - (Y(tg) - 5)) < 14;
+  if (tg > lo && tg < hi) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(tg)}" y2="${Y(tg)}" stroke="var(--lv-tot)" stroke-dasharray="4 4" stroke-width="1"/>`;
   refs.forEach(r => { const y = Y(r.v), near = Math.abs(y - Y(tg)) < 16; const ly = near && tgLeft ? (r.v < tg ? y + 14 : y - 5) : near && r.v < tg ? y + 14 : y - 5; s += `<line x1="${m.l}" x2="${W - m.r}" y1="${y}" y2="${y}" stroke="var(--muted)" stroke-dasharray="2 4" stroke-width="1.2"/><text class="tick halo" x="${m.l + 6}" y="${ly}" text-anchor="start">${esc(r.label)} ${r.fmt ? r.fmt(r.v) : f2(r.v)}</text>`; });
   const area = `M${X(0)},${Y(pts[0].v)}` + pts.slice(1).map((p, i) => `L${X(i + 1)},${Y(p.v)}`).join('') + `L${X(pts.length - 1)},${m.t + ih}L${X(0)},${m.t + ih}Z`;
   if (pts.length > 1) s += `<path d="${area}" fill="var(--series-soft)"/><path d="${pts.map((p, i) => (i ? 'L' : 'M') + X(i) + ',' + Y(p.v)).join('')}" fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -2056,6 +2064,7 @@ function lineChart(el, pts, { height = 230, aria = '', refs = [] } = {}) {
     s += `<g class="pt" data-tip="${esc(p.tip)}"><rect x="${X(i) - half}" y="${m.t}" width="${half * 2}" height="${ih}" fill="transparent"/><line class="xh" x1="${X(i)}" x2="${X(i)}" y1="${m.t}" y2="${m.t + ih}"/><circle class="mk" cx="${X(i)}" cy="${Y(p.v)}" r="4" fill="var(--series)" stroke="var(--surface)" stroke-width="2"/></g>`;
     if ((i % k === 0 && pts.length - 1 - i >= k) || i === pts.length - 1) s += `<text class="tick" x="${X(i)}" y="${H - 8}" text-anchor="${pts.length > 1 && i === 0 ? 'start' : pts.length > 1 && i === pts.length - 1 ? 'end' : 'middle'}">${esc(p.label)}</text>`;
   });
+  if (tg > lo && tg < hi) s += `<text class="tick halo" pointer-events="none" x="${tgLeft ? m.l + 6 : W - m.r}" y="${Y(tg) - 5}" text-anchor="${tgLeft ? 'start' : 'end'}" style="fill:var(--lv-tot-ink)">Ngưỡng Tốt ${nf1.format(tg)}</text>`; // nhãn ngưỡng vẽ sau đường & điểm để không bị che
   const lp = pts[pts.length - 1]; s += `<text class="vlab halo" x="${X(pts.length - 1) - 6}" y="${Y(lp.v) - 10}" text-anchor="end">${f2(lp.v)}</text>`;
   s += `<line class="axis-l" x1="${m.l}" x2="${W - m.r}" y1="${m.t + ih}" y2="${m.t + ih}"/></svg>`;
   el.innerHTML = s;
@@ -2109,7 +2118,7 @@ function renderFoot() {
   const nCrit = S.crit.length;
   $('#foot').innerHTML = `<span>Nguồn: ${esc(src)} · ${nf0.format(S.records.length)} phiếu${nCrit ? ` · ${nCrit} tiêu chí${CFG.SHOW_TOTAL ? ` (tối đa ${nCrit * 5} điểm)` : ''}` : ''}</span>
   <span>${ms ? `Đồng bộ lần cuối: ${fmtD(new Date(ms))} ${fmtT(new Date(ms))}${m.trigger ? ` · ${esc(triggerLabel(m.trigger))}` : ''}` : 'Chưa rõ thời điểm đồng bộ'}</span>
-  <span>Xếp loại theo điểm TB/tiêu chí: Tốt ≥ 4,5 · Khá ≥ 3,5 · Đạt ≥ 2,5 · Chưa đạt &lt; 2,5</span>`;
+  <span>Xếp loại theo điểm TB/tiêu chí: ${LV_SCALE_TXT}</span>`;
 }
 
 /* ---------- Tổng quan ---------- */
@@ -2140,7 +2149,7 @@ function renderOverview(c) {
     <div class="card s4"><div class="card-hd"><div><h2>Phân loại giờ dạy</h2><p>Theo điểm TB/tiêu chí của mỗi phiếu</p></div></div><div id="lvBox"></div></div>
     <div class="card s7"><div class="card-hd"><div>${S.vkind === 'to' ? '<h2>Theo giáo viên trong tổ</h2><p>Bấm một dòng để xem hồ sơ dự giờ của giáo viên</p>' : '<h2>Theo tổ chuyên môn</h2><p>Tổ của giáo viên dạy · bấm một dòng để lọc theo tổ</p>'}</div></div><div id="grpBox"></div></div>
     <div class="card s5"><div class="card-hd"><div><h2 id="trTitle">Xu hướng điểm trung bình</h2><p id="trSub"></p></div></div><div class="chart" id="chTr"></div></div>
-    <div class="card s6"><div class="card-hd"><div><h2>Giờ dạy cần quan tâm</h2><p>Xếp loại Đạt/Chưa đạt hoặc có tiêu chí ≤ ${LOW_SCORE} điểm</p></div></div><div id="watchBox"></div></div>
+    <div class="card s6"><div class="card-hd"><div><h2>Giờ dạy cần quan tâm</h2><p>Xếp loại ${[...WATCH_LV].map(k => LVMAP[k].name).join('/')} hoặc có tiêu chí ≤ ${LOW_SCORE} điểm</p></div></div><div id="watchBox"></div></div>
     <div class="card s6"><div class="card-hd"><div><h2>Phiếu mới nhất</h2><p>Cập nhật theo thời gian thực từ biểu mẫu</p></div><div class="act"><button class="btn" data-go="log">Xem tất cả</button></div></div><div id="feedBox"></div></div>
   </div>`;
 
@@ -2158,10 +2167,10 @@ function renderOverview(c) {
     const pts = [];
     if (weekly) {
       const g = groupBy(c.cur, r => +mondayOf(r.day));
-      for (let d = mondayOf(c.R.a); d <= c.R.b; d = addDays(d, 7)) { const l = g.get(+d) || []; const a = agg(l); pts.push({ label: fmtDM(d), v: a.n, tip: `<b>Tuần ${fmtDM(d)} – ${fmtDM(addDays(d, 6))}</b><br>${a.n} tiết${a.n ? ' · TB ' + f2(a.avg) : ''}${a.n ? `<br><span class="tm">Tốt ${a.lv.tot} · Khá ${a.lv.kha} · Đạt ${a.lv.dat} · Chưa đạt ${a.lv.chua}</span>` : ''}` }); }
+      for (let d = mondayOf(c.R.a); d <= c.R.b; d = addDays(d, 7)) { const l = g.get(+d) || []; const a = agg(l); pts.push({ label: fmtDM(d), v: a.n, tip: `<b>Tuần ${fmtDM(d)} – ${fmtDM(addDays(d, 6))}</b><br>${a.n} tiết${a.n ? ' · TB ' + f2(a.avg) : ''}${a.n ? `<br><span class="tm">${LEVELS.map(l => `${l.name} ${a.lv[l.key]}`).join(' · ')}</span>` : ''}` }); }
     } else {
       const g = groupBy(c.cur, r => +r.day);
-      for (let d = new Date(c.R.a); d <= c.R.b; d = addDays(d, 1)) { const l = g.get(+d) || []; const a = agg(l); pts.push({ label: fmtDM(d), v: a.n, tip: `<b>${WD[d.getDay()]}, ${fmtD(d)}</b><br>${a.n} tiết${a.n ? ' · TB ' + f2(a.avg) : ''}${a.n ? `<br><span class="tm">Tốt ${a.lv.tot} · Khá ${a.lv.kha} · Đạt ${a.lv.dat} · Chưa đạt ${a.lv.chua}</span>` : ''}` }); }
+      for (let d = new Date(c.R.a); d <= c.R.b; d = addDays(d, 1)) { const l = g.get(+d) || []; const a = agg(l); pts.push({ label: fmtDM(d), v: a.n, tip: `<b>${WD[d.getDay()]}, ${fmtD(d)}</b><br>${a.n} tiết${a.n ? ' · TB ' + f2(a.avg) : ''}${a.n ? `<br><span class="tm">${LEVELS.map(l => `${l.name} ${a.lv[l.key]}`).join(' · ')}</span>` : ''}` }); }
     }
     columnChart(ts, pts, { aria: 'Số tiết dự giờ theo thời gian' });
   }
@@ -2200,7 +2209,7 @@ function renderOverview(c) {
   lineChart(tr, tp, { aria: 'Xu hướng điểm trung bình' });
 
   // Cần quan tâm
-  const watch = c.cur.filter(r => r.level === 'dat' || r.level === 'chua' || r.lowCodes.length).sort((a, b) => b.ts - a.ts);
+  const watch = c.cur.filter(r => lvWatch(r) || r.lowCodes.length).sort((a, b) => b.ts - a.ts);
   $('#watchBox').innerHTML = watch.length ? `<div class="feed">${watch.slice(0, 7).map(r => feedItem(r, true)).join('')}</div>${watch.length > 7 ? `<div class="pager"><span>Hiển thị 7/${watch.length} phiếu</span><button class="btn" data-go="log" data-watch="1">Xem tất cả trong Nhật ký</button></div>` : ''}`
     : `<div class="allgood">${ICON.check}Không có giờ dạy nào cần lưu ý trong kỳ này.</div>`;
   // Feed
@@ -2208,7 +2217,7 @@ function renderOverview(c) {
   $('#feedBox').innerHTML = feed.length ? `<div class="feed">${feed.map(r => feedItem(r)).join('')}</div>` : emptyHTML();
 }
 function feedItem(r, flag) {
-  const reason = flag ? (r.level === 'dat' || r.level === 'chua' ? `Xếp loại ${LVMAP[r.level].name}` : '') + (r.lowCodes.length ? `${r.level === 'dat' || r.level === 'chua' ? ' · ' : ''}${r.lowCodes.length > 5 ? r.lowCodes.length + ' tiêu chí' : 'Tiêu chí'} ≤ ${LOW_SCORE}đ${r.lowCodes.length > 5 ? '' : ': ' + r.lowCodes.join(', ')}` : '') : '';
+  const reason = flag ? (lvWatch(r) ? `Xếp loại ${LVMAP[r.level].name}` : '') + (r.lowCodes.length ? `${lvWatch(r) ? ' · ' : ''}${r.lowCodes.length > 5 ? r.lowCodes.length + ' tiêu chí' : 'Tiêu chí'} ≤ ${LOW_SCORE}đ${r.lowCodes.length > 5 ? '' : ': ' + r.lowCodes.join(', ')}` : '') : '';
   return `<div class="fi" data-rec="${esc(r.id)}" role="button" tabindex="0">
     <div class="av" aria-hidden="true">${esc(initials(r.tn))}</div>
     <div style="min-width:0"><div class="t1">${esc(r.tn)}${S.newIds.has(r.id) ? '<span class="newb">MỚI</span>' : ''}</div>
@@ -2228,7 +2237,7 @@ function renderCriteria(c) {
   const bucketTip = (k, key, lb) => `<b>${k.code} · ${esc(k.short)}</b><br>${lb}: ${nf0.format(k.b[key])} phiếu (${pct(k.b[key], k.n)})`;
   const row = k => `<div class="crit-row${weakSet.has(k.code) ? ' weak' : ''}" data-tip="${esc(`<b>${k.code}.</b> ${esc(k.full)}<br><span class='tm'>TB ${f2(k.avg)} · ${pct(k.b.s5, k.n)} đạt 5 điểm</span>`)}">
       <div class="cl"><b>${k.code}</b><span>${esc(k.short)}</span></div>
-      <div class="stack">${[['low', 'lv-chua', '≤ 2 điểm'], ['s3', 'lv-dat', '3 điểm'], ['s4', 'lv-kha', '4 điểm'], ['s5', 'lv-tot', '5 điểm']].map(([key, col, lb]) => k.b[key] ? `<span style="flex:${k.b[key]} 1 0;background:var(--${col})" data-tip="${esc(bucketTip(k, key, lb))}"></span>` : '').join('')}</div>
+      <div class="stack">${[['low', 'lv-nguy', '≤ 2 điểm'], ['s3', 'lv-chua', '3 điểm'], ['s4', 'lv-dat', '4 điểm'], ['s5', 'lv-tot', '5 điểm']].map(([key, col, lb]) => k.b[key] ? `<span style="flex:${k.b[key]} 1 0;background:var(--${col})" data-tip="${esc(bucketTip(k, key, lb))}"></span>` : '').join('')}</div>
       <div class="av2">${f2(k.avg)}</div></div>`;
   let body = '';
   if (S.critSort === 'asc') body = order.map(row).join('');
@@ -2258,7 +2267,7 @@ function renderCriteria(c) {
   <div class="grid" style="margin-top:16px">
     <div class="card s8"><div class="card-hd"><div><h2>Phân bố điểm theo ${S.crit.length} tiêu chí</h2><p>Tỷ lệ phiếu theo mức điểm · số bên phải là điểm TB · <span style="color:var(--down)">chữ đỏ</span> = 5 tiêu chí thấp nhất</p></div>
       <div class="act"><div class="mini-seg" id="critSort"><button data-s="code" aria-pressed="${S.critSort === 'code'}">Theo lĩnh vực</button><button data-s="asc" aria-pressed="${S.critSort === 'asc'}">Thấp → cao</button></div></div></div>
-      <div class="legend" style="margin-bottom:10px"><span style="--c:var(--lv-chua)">≤ 2 điểm</span><span style="--c:var(--lv-dat)">3 điểm</span><span style="--c:var(--lv-kha)">4 điểm</span><span style="--c:var(--lv-tot)">5 điểm</span></div>
+      <div class="legend" style="margin-bottom:10px"><span style="--c:var(--lv-nguy)">≤ 2 điểm</span><span style="--c:var(--lv-chua)">3 điểm</span><span style="--c:var(--lv-dat)">4 điểm</span><span style="--c:var(--lv-tot)">5 điểm</span></div>
       ${body}</div>
     <div class="card s4"><div class="card-hd"><div><h2>5 tiêu chí cần ưu tiên cải thiện</h2><p>Điểm TB thấp nhất trong kỳ</p></div></div>
       <div class="weak-list">${weak.map((k, i) => { const p = csP ? csP[k.j].avg : null; return `<div class="weak-item"><div class="rk">${i + 1}</div><div><div class="ttl">${k.code}. ${esc(k.short)}</div><div class="ds">${pct(k.b.low + k.b.s3, k.n)} phiếu chỉ đạt ≤ 3 điểm${p != null ? ' · ' + deltaHTML(k.avg, p, { mode: 'abs', label: '' }) : ''}</div></div><div class="score">${f2(k.avg)}</div></div>`; }).join('')}</div></div>
@@ -2275,15 +2284,15 @@ function renderTeachers(c) {
   const key = { name: t => t.name, group: t => gOrd(t.group) * 1000 + 0, n: t => t.n, avg: t => t.avg, min: t => t.min, last: t => +t.last.day }[k] || (t => t.n);
   ts.sort((a, b) => { const x = key(a), y = key(b); const r = typeof x === 'string' ? x.localeCompare(y, 'vi') : x - y; return r * d || a.name.localeCompare(b.name, 'vi'); });
   const th = (id, lb, cls = '') => `<th class="${cls}${S.tSort.k === id ? ' sorted' : ''}" data-sort="${id}">${lb}<span class="ar">${S.tSort.k === id ? (d > 0 ? '▲' : '▼') : '↕'}</span></th>`;
-  const lowN = ts.filter(t => t.avg < 3.5).length;
-  v.innerHTML = `<div class="card"><div class="card-hd"><div><h2>Kết quả theo giáo viên được dự giờ</h2><p>${nf0.format(ts.length)} giáo viên · ${nf0.format(c.cur.length)} phiếu${lowN ? ` · <span style="color:var(--down)">${lowN} GV có điểm TB dưới 3,5</span>` : ''} · bấm vào một dòng để xem hồ sơ dự giờ</p></div>
+  const lowN = ts.filter(t => WATCH_LV.has(levelOf(t.avg))).length; // TB dưới ngưỡng Đạt
+  v.innerHTML = `<div class="card"><div class="card-hd"><div><h2>Kết quả theo giáo viên được dự giờ</h2><p>${nf0.format(ts.length)} giáo viên · ${nf0.format(c.cur.length)} phiếu${lowN ? ` · <span style="color:var(--down)">${lowN} GV có điểm TB dưới ${nf1.format(LVMAP.dat.min)}</span>` : ''} · bấm vào một dòng để xem hồ sơ dự giờ</p></div>
     <div class="act"><button class="btn" id="expT">${ICON.dl}Xuất CSV</button></div></div>
     ${ts.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th>${th('name', 'Giáo viên')}${th('group', 'Tổ')}${th('n', 'Số tiết', 'r')}${th('avg', 'Điểm TB', 'r')}${th('min', 'Thấp nhất', 'r')}<th>Diễn biến</th>${th('last', 'Lần gần nhất')}<th style="min-width:120px">Phân loại</th></tr></thead><tbody>
     ${ts.map((t, i) => `<tr class="click" data-teacher="${esc(t.key)}"><td class="ts num">${i + 1}</td><td><div class="tn">${esc(t.name)}</div><div class="ts">${t.dup ? `${t.ma ? `Mã ${esc(t.ma)}` : 'Chưa xác định mã'} · ` : ''}${esc(t.subjects.slice(0, 3).join(', '))}</div></td><td><span class="gtag">${esc(t.group)}</span></td><td class="r num">${t.n}</td><td class="r">${lvChip(levelOf(t.avg), t.avg)}</td><td class="r num">${f2(t.min)}</td><td>${spark(t.recs.map(r => r.avg))}</td><td class="num">${fmtD(t.last.day)}${Date.now() - t.last.ts < 7 * DAY ? `<div class="ts">${esc(ago(t.last.ts))}</div>` : ''}</td><td>${stackLv(t.lv, t.n, 8)}</td></tr>`).join('')}
     </tbody></table></div>` : emptyHTML()}</div>`;
   $('#expT')?.addEventListener('click', () => downloadCSV(`ket-qua-giao-vien_${toISO(c.R.a)}_${toISO(c.R.b)}.csv`,
-    [['Giáo viên', 'Tổ', 'Môn', 'Số tiết', 'Điểm TB', 'Xếp loại TB', 'Thấp nhất', 'Tốt', 'Khá', 'Đạt', 'Chưa đạt', 'Lần gần nhất'],
-    ...ts.map(t => [t.name, t.group, t.subjects.join('; '), t.n, t.avg.toFixed(2), LVMAP[levelOf(t.avg)].name, t.min.toFixed(2), t.lv.tot, t.lv.kha, t.lv.dat, t.lv.chua, fmtD(t.last.day)])]));
+    [['Giáo viên', 'Tổ', 'Môn', 'Số tiết', 'Điểm TB', 'Xếp loại TB', 'Thấp nhất', ...LEVELS.map(l => l.name), 'Lần gần nhất'],
+    ...ts.map(t => [t.name, t.group, t.subjects.join('; '), t.n, t.avg.toFixed(2), LVMAP[levelOf(t.avg)].name, t.min.toFixed(2), ...LEVELS.map(l => t.lv[l.key]), fmtD(t.last.day)])]));
 }
 
 /* ---------- Dự giờ & độ phủ ---------- */
@@ -2333,7 +2342,7 @@ let watchOnly = false;
 function renderLog(c) {
   const v = $('#v-log');
   let list = c.cur.slice().sort((a, b) => b.ts - a.ts);
-  if (watchOnly) list = list.filter(r => r.level === 'dat' || r.level === 'chua' || r.lowCodes.length);
+  if (watchOnly) list = list.filter(r => lvWatch(r) || r.lowCodes.length);
   const pages = Math.max(1, Math.ceil(list.length / CFG.LOG_PAGE_SIZE));
   S.logPage = Math.min(S.logPage, pages - 1);
   const pg = list.slice(S.logPage * CFG.LOG_PAGE_SIZE, (S.logPage + 1) * CFG.LOG_PAGE_SIZE);
@@ -2368,7 +2377,8 @@ function multiLine(el, series, xs, { height = 250, aria = '' } = {}) {
   const k = Math.max(1, Math.ceil(54 / (iw / Math.max(1, n - 1))));
   let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}">`;
   for (let t = lo; t <= hi + 1e-9; t += step) { const y = Y(t); s += `<line class="grid-l" x1="${m.l}" x2="${W - m.r}" y1="${y}" y2="${y}"/><text class="tick" x="${m.l - 8}" y="${y + 4}" text-anchor="end">${nf2.format(t).replace(/0$/, '')}</text>`; }
-  if (4.5 > lo) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(4.5)}" y2="${Y(4.5)}" stroke="var(--lv-tot)" stroke-dasharray="4 4" stroke-width="1"/><text class="tick halo" x="${m.l + 4}" y="${Y(4.5) - 5}" style="fill:var(--lv-tot-ink)">Ngưỡng Tốt 4,5</text>`;
+  const tg = LVMAP.tot.min;
+  if (tg > lo) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(tg)}" y2="${Y(tg)}" stroke="var(--lv-tot)" stroke-dasharray="4 4" stroke-width="1"/>`;
   const half = n === 1 ? iw / 2 : iw / (n - 1) / 2;
   xs.forEach((x, i) => {
     const rows = series.filter(se => se.vals[i] != null).map(se => `${GLYPH[se.shape] || '●'} ${esc(se.label)}: <b>${f2(se.vals[i])}</b> · ${nf0.format(se.ns[i])} tiết`);
@@ -2380,6 +2390,7 @@ function multiLine(el, series, xs, { height = 250, aria = '' } = {}) {
     if (P.length > 1) s += `<path d="${P.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('')}" fill="none" stroke="${se.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" pointer-events="none"/>`;
   });
   series.forEach(se => se.vals.forEach((v, i) => { if (v != null) s += marker(se.shape, X(i), Y(v), 4, se.color).replace('/>', ' pointer-events="none"/>'); }));
+  if (tg > lo) s += `<text class="tick halo" pointer-events="none" x="${m.l + 4}" y="${Y(tg) - 5}" style="fill:var(--lv-tot-ink)">Ngưỡng Tốt ${nf1.format(tg)}</text>`; // nhãn ngưỡng vẽ sau đường & điểm để không bị che
   const ends = series.map(se => { let i = se.vals.length - 1; while (i >= 0 && se.vals[i] == null) i--; return i < 0 ? null : { se, v: se.vals[i], y: Y(se.vals[i]) }; }).filter(Boolean).sort((a, b) => a.y - b.y);
   for (let j = 1; j < ends.length; j++) if (ends[j].y - ends[j - 1].y < 16) ends[j].y = ends[j - 1].y + 16;
   ends.forEach(e => { const x = W - m.r + 12; s += marker(e.se.shape, x, e.y, 4, e.se.color) + `<text class="ml-lab" x="${x + 10}" y="${e.y + 4}">${esc(e.se.label)} ${f2(e.v)}</text>`; });
@@ -2587,7 +2598,7 @@ function renderMe(c) {
   <div class="kpis k5">
     ${kpi(ICON.doc, 'Tiết được dự giờ', nf0.format(A.n), (B && deltaHTML(A.n, B.n)) || `Tổng cộng: <b>${nf0.format(tAll.length)}</b> tiết`, true)}
     ${kpi(ICON.star, 'Điểm trung bình', A.avg != null ? f2(A.avg) + '<small>/5</small>' : '–', benchAvg || (CFG.SHOW_TOTAL && A.n ? `≈ ${nf1.format(A.total)}/${Math.round(A.max)} điểm mỗi phiếu` : ''))}
-    ${kpi(ICON.award, 'Xếp loại trung bình', myLv ? lvChip(myLv) : '–', A.n ? `Tốt ${A.lv.tot} · Khá ${A.lv.kha} · Đạt ${A.lv.dat} · Chưa đạt ${A.lv.chua}` : 'Chưa có tiết trong kỳ')}
+    ${kpi(ICON.award, 'Xếp loại trung bình', myLv ? lvChip(myLv) : '–', A.n ? LEVELS.map(l => `<span style="white-space:nowrap">${l.name} ${A.lv[l.key]}</span>`).join(' · ') : 'Chưa có tiết trong kỳ')}
     ${kpi(ICON.check, 'Tỷ lệ giờ dạy Tốt', A.n ? nf0.format(Math.round(pctN(A.lv.tot, A.n))) + '<small>%</small>' : '–', bTot != null ? `${esc(bTotB === bT ? tName : lName)}: <b>${bTot}</b>` : (A.n ? `${A.lv.tot}/${A.n} tiết` : ''))}
     ${kpi(ICON.eye, 'Phiếu tôi đã dự', nf0.format(o.length), `Tuần này: <b>${nf0.format(oWeek)}</b> · tổng ${nf0.format(oAll)}`)}
   </div>
