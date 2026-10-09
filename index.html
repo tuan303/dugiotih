@@ -2106,7 +2106,7 @@ function renderFoot() {
   $('#foot').innerHTML = `<span>Nguồn: ${esc(src)} · ${nf0.format(S.records.length)} phiếu${nCrit ? ` · ${nCrit} tiêu chí${CFG.SHOW_TOTAL ? ` (tối đa ${nCrit * 5} điểm)` : ''}` : ''}</span>
   <span>${ms ? `Cập nhật lần cuối: ${fmtD(new Date(ms))} ${fmtT(new Date(ms))}${m.trigger ? ` · ${esc(triggerLabel(m.trigger))}` : ''}` : 'Chưa rõ thời điểm cập nhật'}</span>
   <span>Xếp loại theo điểm TB/tiêu chí: ${LV_SCALE_TXT}</span>
-  <div class="credit"><span>© Designed by Tuan™</span></div>`;
+  <div class="credit"><span>© Designed &amp; Developed by Tuan™</span></div>`;
 }
 
 /* ---------- Tổng quan ---------- */
