@@ -396,6 +396,8 @@ tr:last-child td{border-bottom:0}
 .boot p{max-width:520px;margin:4px auto;color:var(--muted);font-size:13px}
 .foot{color:var(--muted);font-size:12px;padding:8px 0 28px;display:flex;flex-wrap:wrap;gap:6px 18px;justify-content:space-between;border-top:1px solid var(--line);margin-top:8px;padding-top:16px}
 .foot a{color:var(--ink-2)}
+.foot .credit{flex-basis:100%;display:flex;justify-content:center;margin-top:10px}
+.foot .credit span{display:inline-block;padding:4px 14px;border-radius:999px;background:#5B6283;color:#fff;font-size:11.5px;font-weight:700;letter-spacing:.01em;white-space:nowrap}
 
 @media (max-width:900px){.bar{position:static}}
 @media (max-width:640px){
@@ -2100,7 +2102,8 @@ function renderFoot() {
   const nCrit = S.crit.length;
   $('#foot').innerHTML = `<span>Nguồn: ${esc(src)} · ${nf0.format(S.records.length)} phiếu${nCrit ? ` · ${nCrit} tiêu chí${CFG.SHOW_TOTAL ? ` (tối đa ${nCrit * 5} điểm)` : ''}` : ''}</span>
   <span>${ms ? `Cập nhật lần cuối: ${fmtD(new Date(ms))} ${fmtT(new Date(ms))}${m.trigger ? ` · ${esc(triggerLabel(m.trigger))}` : ''}` : 'Chưa rõ thời điểm cập nhật'}</span>
-  <span>Xếp loại theo điểm TB/tiêu chí: ${LV_SCALE_TXT}</span>`;
+  <span>Xếp loại theo điểm TB/tiêu chí: ${LV_SCALE_TXT}</span>
+  <div class="credit"><span>Designed &amp; Developed by Tuan</span></div>`;
 }
 
 /* ---------- Tổng quan ---------- */
