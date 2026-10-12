@@ -3,6 +3,7 @@
 // Nguồn quyền:
 //  1) TỰ ĐỘNG từ “DS Nhân sự” của từng cấp (chỉ dòng đang làm việc – Ghi chú/Thâm niên không có “nghỉ”):
 //     • Tổ/Bộ phận ~ “Ban lãnh đạo” hoặc Chức danh ~ “Tổng hiệu trưởng”                 → BGH liên cấp (xem cả 3 cấp)
+//       (cả Tổ/Bộ phận hoặc Chức danh ghi “BGH / Ban giám hiệu liên cấp / toàn trường”, vd. “BGH liên cấp”)
 //     • Tổ/Bộ phận ~ “Ban giám hiệu” hoặc Chức danh ~ “hiệu trưởng / BGH / TV BGH”      → BGH cấp của Sheet đó
 //     • Chức danh ~ “Tổ trưởng” (không tính tổ phó, nhóm trưởng, tổ trưởng khối, tổ trưởng công đoàn, “nguyên …”)
 //                                                                                       → Tổ trưởng của tổ đó (trong cấp đó)

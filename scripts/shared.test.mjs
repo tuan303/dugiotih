@@ -229,6 +229,17 @@ describe('Tiện ích', () => {
     assert.equal(fold('Vương Thị Thúy'), fold('Vương Thị Thùy'), 'fold() bỏ dấu → chỉ dùng khi cách viết bỏ dấu là duy nhất');
     assert.notEqual(nameKey('Đỗ Văn A'), nameKey('Do Van A'));
   });
+  test('staffRoleFlags: Tổ/Bộ phận hoặc Chức danh “BGH liên cấp / toàn trường” → BGH liên cấp (trừ chức danh hành chính)', () => {
+    const f = (toRaw, role, cap = 'tih') => staffRoleFlags({ toRaw, role, to: normTo(cap, toRaw) }, cap);
+    const none = { bghAll: false, bghCap: false, toTruong: '' };
+    assert.deepEqual(f('BGH liên cấp', 'CV Nhân sự'), { ...none, bghAll: true }, 'chuyên viên nhân sự giám sát – ghi Tổ/Bộ phận “BGH liên cấp”');
+    assert.deepEqual(f('Ban Giám hiệu toàn trường', 'Chuyên gia'), { ...none, bghAll: true, bghCap: true });
+    assert.deepEqual(f('Văn phòng', 'TV BGH liên cấp'), { ...none, bghAll: true, bghCap: true });
+    assert.deepEqual(f('BGH liên cấp', 'Thư ký'), none, 'chức danh hành chính không được quyền lãnh đạo');
+    assert.deepEqual(f('BGH liên cấp', 'Nhân viên văn phòng'), none);
+    assert.deepEqual(f('Ban Giám hiệu', 'Phó hiệu trưởng'), { ...none, bghCap: true }, 'không ghi liên cấp → vẫn chỉ BGH cấp');
+    assert.deepEqual(f('Tổ Liên cấp Năng khiếu', 'GV'), none, '“liên cấp” không kèm BGH → không phải lãnh đạo');
+  });
   test('staffRoleFlags: công đoàn, “nguyên …”, chức danh hành chính → không có quyền lãnh đạo', () => {
     const f = (toRaw, role, cap = 'thcs') => staffRoleFlags({ toRaw, role, to: normTo(cap, toRaw) }, cap);
     const none = { bghAll: false, bghCap: false, toTruong: '' };

@@ -478,6 +478,25 @@ describe('runSync v2 – lỗi Sheet và chốt chặn', () => {
 });
 
 /* =====================================================================
+ * DS Nhân sự: Tổ/Bộ phận “BGH liên cấp” (vd. chuyên viên nhân sự giám sát) → BGH liên cấp
+ * ===================================================================== */
+describe('runSync v2 – DS Nhân sự ghi “BGH liên cấp”', () => {
+  test('Cấp “Nhân Sự”, Tổ/Bộ phận “BGH liên cấp”, Chức danh “CV Nhân sự” → BGH liên cấp, xem mọi cấp; “Thư ký” thì không', async () => {
+    const { store, src, sync } = setup();
+    src.tables[SHEET_TIH][STAFF_TAB] = tihStaffTable([...TIH_STAFF_ROWS,
+      [101133, 'Chuyên Viên Một', 'Nhân Sự', 'BGH liên cấp', 'CV Nhân sự', em('cv.mot')],
+      [101134, 'Thư Ký Hai', 'Nhân Sự', 'BGH liên cấp', 'Thư ký', em('tk.hai')]]);
+    await sync();
+    const a = await accOf(store, 'cv.mot');
+    assert.equal(a.roles.bghAll, true);
+    assert.ok(a.scopes.includes('L_tih') && a.scopes.includes('L_thcs'), 'xem dashboard cả các cấp');
+    const b = await accOf(store, 'tk.hai');
+    assert.equal(b.roles.bghAll, false);
+    assert.ok(!b.scopes.some(x => x.startsWith('L_')), 'thư ký: chỉ quyền giáo viên');
+  });
+});
+
+/* =====================================================================
  * Chỉ đồng bộ khi có dữ liệu mới (dấu vân tay đầu vào)
  * ===================================================================== */
 describe('runSync v2 – chỉ đồng bộ khi Google Sheet có thay đổi', () => {
