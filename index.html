@@ -2295,15 +2295,15 @@ function renderTeachers(c) {
   const th = (id, lb, cls = '') => `<th class="${cls}${S.tSort.k === id ? ' sorted' : ''}" data-sort="${id}">${lb}<span class="ar">${S.tSort.k === id ? (d > 0 ? '▲' : '▼') : '↕'}</span></th>`;
   const lowN = ts.filter(t => WATCH_LV.has(levelOf(t.avg))).length; // TB dưới ngưỡng Đạt
   v.innerHTML = `<div class="card"><div class="card-hd"><div><h2>Kết quả theo giáo viên được dự giờ</h2><p>${nf0.format(ts.length)} giáo viên · ${nf0.format(c.cur.length)} phiếu${lowN ? ` · <span style="color:var(--down)">${lowN} GV có điểm TB dưới ${nf1.format(LVMAP.dat.min)}</span>` : ''} · bấm vào một dòng để xem hồ sơ dự giờ</p>
-      <p>“Đã dự / TB đã chấm”: phiếu GV đó chấm khi đi dự giờ đồng nghiệp trong kỳ${S.vkind === 'to' ? ' (chỉ các tiết của tổ đang xem)' : ''}; số nhỏ bên dưới là chênh lệch so với TB chung của các phiếu trong kỳ (${f2(gAll)}).</p></div>
+      <p>“Điểm được chấm”: điểm TB người dự chấm cho GV. “Đã dự / Điểm chấm”: số phiếu và điểm TB GV đó chấm khi đi dự giờ đồng nghiệp trong kỳ${S.vkind === 'to' ? ' (chỉ các tiết của tổ đang xem)' : ''}; số nhỏ bên dưới là chênh lệch so với TB chung của các phiếu trong kỳ (${f2(gAll)}).</p></div>
     <div class="act"><button class="btn" id="expT">${ICON.dl}Xuất CSV</button></div></div>
-    ${ts.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th>${th('name', 'Giáo viên')}${th('group', 'Tổ')}${th('n', 'Số tiết', 'r')}${th('avg', 'Điểm TB', 'r')}${th('min', 'Thấp nhất', 'r')}<th>Diễn biến</th>${th('last', 'Lần gần nhất')}<th style="min-width:120px">Phân loại</th>${th('gn', 'Đã dự', 'r')}${th('gavg', 'TB đã chấm', 'r')}</tr></thead><tbody>
-    ${ts.map((t, i) => `<tr class="click" data-teacher="${esc(t.key)}"><td class="ts num">${i + 1}</td><td><div class="tn">${esc(t.name)}</div><div class="ts">${t.dup ? `${t.ma ? `Mã ${esc(t.ma)}` : 'Chưa xác định mã'} · ` : ''}${esc(t.subjects.slice(0, 3).join(', '))}</div></td><td><span class="gtag">${esc(t.group)}</span></td><td class="r num">${t.n}</td><td class="r">${lvChip(levelOf(t.avg), t.avg)}</td><td class="r num">${f2(t.min)}</td><td>${spark(t.recs.map(r => r.avg))}</td><td class="num">${fmtD(t.last.day)}${Date.now() - t.last.ts < 7 * DAY ? `<div class="ts">${esc(ago(t.last.ts))}</div>` : ''}</td><td>${stackLv(t.lv, t.n, 8)}</td><td class="r num">${t.gN || '<span class="ts">–</span>'}</td><td class="r num">${t.gAvg != null ? `${f2(t.gAvg)}<div class="ts" title="Chênh lệch so với TB chung của các phiếu trong kỳ">${signed(t.gAvg - gAll)}</div>` : '<span class="ts">–</span>'}</td></tr>`).join('')}
+    ${ts.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th>${th('name', 'Giáo viên')}${th('group', 'Tổ')}${th('n', 'Số tiết', 'r')}${th('avg', 'Điểm được chấm', 'r')}${th('min', 'Thấp nhất', 'r')}<th>Diễn biến</th>${th('last', 'Lần gần nhất')}<th style="min-width:120px">Phân loại</th>${th('gn', 'Đã dự', 'r')}${th('gavg', 'Điểm chấm', 'r')}</tr></thead><tbody>
+    ${ts.map((t, i) => `<tr class="click" data-teacher="${esc(t.key)}"><td class="ts num">${i + 1}</td><td><div class="tn">${esc(t.name)}</div><div class="ts">${t.dup ? `${t.ma ? `Mã ${esc(t.ma)}` : 'Chưa xác định mã'} · ` : ''}${esc(t.subjects.slice(0, 3).join(', '))}</div></td><td><span class="gtag">${esc(t.group)}</span></td><td class="r num">${t.n}</td><td class="r">${lvChip(levelOf(t.avg), t.avg)}</td><td class="r num">${f2(t.min)}</td><td>${spark(t.recs.map(r => r.avg))}</td><td class="num">${fmtD(t.last.day)}${Date.now() - t.last.ts < 7 * DAY ? `<div class="ts">${esc(ago(t.last.ts))}</div>` : ''}</td><td>${stackLv(t.lv, t.n, 8)}</td><td class="r num">${t.gN || '<span class="ts">–</span>'}</td><td class="r">${t.gAvg != null ? `${lvChip(levelOf(t.gAvg), t.gAvg)}<div class="ts num" title="Chênh lệch so với TB chung của các phiếu trong kỳ">${signed(t.gAvg - gAll)}</div>` : '<span class="ts">–</span>'}</td></tr>`).join('')}
     </tbody></table></div>` : emptyHTML()}</div>`;
   $('#expT')?.addEventListener('click', () => downloadCSV(`ket-qua-giao-vien_${toISO(c.R.a)}_${toISO(c.R.b)}.csv`,
-    [['Giáo viên', 'Tổ', 'Môn', 'Số tiết', 'Điểm TB', 'Xếp loại TB', 'Thấp nhất', ...LEVELS.map(l => l.name), 'Lần gần nhất', 'Số phiếu đã dự (chấm)', 'TB đã chấm', 'Chênh lệch so TB chung'],
+    [['Giáo viên', 'Tổ', 'Môn', 'Số tiết', 'Điểm được chấm', 'Xếp loại (được chấm)', 'Thấp nhất', ...LEVELS.map(l => l.name), 'Lần gần nhất', 'Số phiếu đã dự (chấm)', 'Điểm chấm', 'Xếp loại (chấm)', 'Chênh lệch so TB chung'],
     ...ts.map(t => [t.name, t.group, t.subjects.join('; '), t.n, t.avg.toFixed(2), LVMAP[levelOf(t.avg)].name, t.min.toFixed(2), ...LEVELS.map(l => t.lv[l.key]), fmtD(t.last.day),
-      t.gN, csvNum2(t.gAvg), t.gAvg != null && gAll != null ? csvNum2(t.gAvg - gAll) : ''])]));
+      t.gN, csvNum2(t.gAvg), t.gAvg != null ? LVMAP[levelOf(t.gAvg)].name : '', t.gAvg != null && gAll != null ? csvNum2(t.gAvg - gAll) : ''])]));
 }
 
 /* ---------- Dự giờ & độ phủ ---------- */
@@ -2700,7 +2700,7 @@ function openTeacher(key) {
   const head = `<div class="k">Hồ sơ dự giờ giáo viên${S.vkind === 'school' ? ' · ' + esc(capLabel(t.cap)) : ''}</div><h3 id="pTitle">${esc(teacherName(all))}</h3><p>${esc(t.tg)}${topMa(all) ? ` · Mã ${esc(topMa(all))}` : ''} · ${esc([...new Set(all.map(r => r.subject))].join(', '))}</p>`;
   const body = `<div class="p-sec"><div class="facts">
       <div class="fact"><div class="l">${inP.length ? 'Số tiết trong kỳ' : 'Tổng số tiết'}</div><div class="v num">${use.length}<span class="ts"> / ${all.length} tổng</span></div></div>
-      <div class="fact"><div class="l">Điểm TB</div><div class="v num">${f2(A.avg)}</div></div>
+      <div class="fact"><div class="l">Điểm được chấm</div><div class="v num">${f2(A.avg)}</div></div>
       <div class="fact"><div class="l">Xếp loại TB</div><div class="v">${lvChip(levelOf(A.avg))}</div></div>
       <div class="fact"><div class="l">Tỷ lệ Tốt</div><div class="v num">${pct(A.lv.tot, A.n)}</div></div></div>
       ${inP.length ? '' : `<p class="ts" style="margin-top:8px">GV chưa được dự giờ trong kỳ đang lọc – hiển thị toàn bộ dữ liệu.</p>`}</div>
@@ -2726,7 +2726,7 @@ function givenSection(t, R, cmp) {
   return `<div class="p-sec"><h4>Khi đi dự giờ đồng nghiệp (${all.length} phiếu đã chấm)</h4>${note}
     <div class="facts">
       <div class="fact"><div class="l">${inP.length ? 'Phiếu đã chấm trong kỳ' : 'Tổng phiếu đã chấm'}</div><div class="v num">${use.length}${inP.length ? `<span class="ts"> / ${all.length} tổng</span>` : ''}</div></div>
-      <div class="fact"><div class="l">TB đã chấm</div><div class="v num">${f2(G.avg)}</div></div>
+      <div class="fact"><div class="l">Điểm chấm</div><div class="v">${lvChip(levelOf(G.avg), G.avg)}</div></div>
       <div class="fact"><div class="l">So TB chung ${esc(cmp)}</div><div class="v num" title="TB chung: ${f2(base)}">${signed(G.avg - base)}</div></div></div>
     ${inP.length ? '' : `<p class="ts" style="margin-top:8px">Chưa chấm phiếu nào trong kỳ đang lọc – hiển thị toàn bộ dữ liệu.</p>`}
     <div style="margin:12px 0 6px" class="ts">Xếp loại đã cho</div>${stackLv(G.lv, G.n, 10)}
