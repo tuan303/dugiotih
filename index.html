@@ -1970,6 +1970,20 @@ function teacherStats(list) {
   out.forEach(t => { t.dup = cnt.get(fold(t.name)) > 1; });
   return out;
 }
+/* Điểm GV đã chấm khi đi dự giờ đồng nghiệp. Ghép người dự ↔ người dạy theo khóa nhân thân máy chủ đã ghép từ DS Nhân sự
+   (op/tp – hai người trùng họ tên không bị gộp); phiếu chưa ghép được thì theo tổ + họ tên. */
+const capPre = r => (r.cap ? r.cap + ':' : '');
+const obsKeyOf = r => capPre(r) + (r.op ? '#' + r.op : 'n:' + r.og + '|' + fold(r.on));
+const teachKeysOf = r => [...(r.tp ? [capPre(r) + '#' + r.tp] : []), capPre(r) + 'n:' + r.tg + '|' + fold(r.tn)];
+function givenIndex(list) { const m = new Map(); for (const r of list) { const k = obsKeyOf(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); } return m; }
+const givenFor = (idx, r) => teachKeysOf(r).flatMap(k => idx.get(k) || []);
+const signed = v => (v == null || !isFinite(v) ? '–' : Math.abs(v) < 0.005 ? '±0' : (v > 0 ? '+' : '−') + nf2.format(Math.abs(v)));
+// Phiếu trong kỳ, CHỈ lọc theo thời gian (bỏ qua tổ / môn / khối / người dự): GV đi dự giờ cả tổ khác, và bộ lọc “người dự”
+// không được làm mất phiếu GV đã chấm. S.records đã giới hạn theo phạm vi quyền (cấp / tổ) của tài khoản.
+const inPeriod = R => S.records.filter(r => r.day >= R.a && r.day <= R.b);
+// Số cho CSV: làm tròn 2 chữ số giống hệt bảng (Intl), xuất kiểu SỐ (không bị chèn dấu ' như chuỗi bắt đầu bằng “-”).
+const csvNum2 = v => (v == null || !isFinite(v) ? '' : +new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false }).format(v));
+
 // Độ phủ: GV trong DS nhân sự đã được dự ít nhất 1 tiết. Khớp theo khóa nhân thân của máy chủ (staff.k = phiếu.tp – hai người
 // trùng họ tên được tính riêng); phiếu máy chủ chưa ghép được (không có tp) khớp theo họ tên đã chuẩn hóa như v1.
 function coverageFor(list, staff) {
@@ -2268,19 +2282,28 @@ function renderCriteria(c) {
 function renderTeachers(c) {
   const v = $('#v-teachers');
   const ts = teacherStats(c.cur);
+  // Khi đi dự giờ: phiếu trong kỳ (chỉ lọc thời gian – xem inPeriod), trong phạm vi dữ liệu của tài khoản.
+  const gPool = inPeriod(c.R), gIdx = givenIndex(gPool), gAll = agg(gPool).avg;
+  ts.forEach(t => { const g = givenFor(gIdx, t.recs[0]); t.gN = g.length; t.gAvg = g.length ? agg(g).avg : null; });
   const { k, d } = S.tSort;
-  const key = { name: t => t.name, group: t => gOrd(t.group) * 1000 + 0, n: t => t.n, avg: t => t.avg, min: t => t.min, last: t => +t.last.day }[k] || (t => t.n);
-  ts.sort((a, b) => { const x = key(a), y = key(b); const r = typeof x === 'string' ? x.localeCompare(y, 'vi') : x - y; return r * d || a.name.localeCompare(b.name, 'vi'); });
+  const key = { name: t => t.name, group: t => gOrd(t.group) * 1000 + 0, n: t => t.n, avg: t => t.avg, min: t => t.min, last: t => +t.last.day, gn: t => t.gN, gavg: t => t.gAvg }[k] || (t => t.n);
+  ts.sort((a, b) => {
+    const x = key(a), y = key(b);
+    if (x == null || y == null) return x == null && y == null ? a.name.localeCompare(b.name, 'vi') : x == null ? 1 : -1; // chưa có dữ liệu: luôn ở cuối
+    const r = typeof x === 'string' ? x.localeCompare(y, 'vi') : x - y; return r * d || a.name.localeCompare(b.name, 'vi');
+  });
   const th = (id, lb, cls = '') => `<th class="${cls}${S.tSort.k === id ? ' sorted' : ''}" data-sort="${id}">${lb}<span class="ar">${S.tSort.k === id ? (d > 0 ? '▲' : '▼') : '↕'}</span></th>`;
   const lowN = ts.filter(t => WATCH_LV.has(levelOf(t.avg))).length; // TB dưới ngưỡng Đạt
-  v.innerHTML = `<div class="card"><div class="card-hd"><div><h2>Kết quả theo giáo viên được dự giờ</h2><p>${nf0.format(ts.length)} giáo viên · ${nf0.format(c.cur.length)} phiếu${lowN ? ` · <span style="color:var(--down)">${lowN} GV có điểm TB dưới ${nf1.format(LVMAP.dat.min)}</span>` : ''} · bấm vào một dòng để xem hồ sơ dự giờ</p></div>
+  v.innerHTML = `<div class="card"><div class="card-hd"><div><h2>Kết quả theo giáo viên được dự giờ</h2><p>${nf0.format(ts.length)} giáo viên · ${nf0.format(c.cur.length)} phiếu${lowN ? ` · <span style="color:var(--down)">${lowN} GV có điểm TB dưới ${nf1.format(LVMAP.dat.min)}</span>` : ''} · bấm vào một dòng để xem hồ sơ dự giờ</p>
+      <p>“Đã dự / TB đã chấm”: phiếu GV đó chấm khi đi dự giờ đồng nghiệp trong kỳ${S.vkind === 'to' ? ' (chỉ các tiết của tổ đang xem)' : ''}; số nhỏ bên dưới là chênh lệch so với TB chung của các phiếu trong kỳ (${f2(gAll)}).</p></div>
     <div class="act"><button class="btn" id="expT">${ICON.dl}Xuất CSV</button></div></div>
-    ${ts.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th>${th('name', 'Giáo viên')}${th('group', 'Tổ')}${th('n', 'Số tiết', 'r')}${th('avg', 'Điểm TB', 'r')}${th('min', 'Thấp nhất', 'r')}<th>Diễn biến</th>${th('last', 'Lần gần nhất')}<th style="min-width:120px">Phân loại</th></tr></thead><tbody>
-    ${ts.map((t, i) => `<tr class="click" data-teacher="${esc(t.key)}"><td class="ts num">${i + 1}</td><td><div class="tn">${esc(t.name)}</div><div class="ts">${t.dup ? `${t.ma ? `Mã ${esc(t.ma)}` : 'Chưa xác định mã'} · ` : ''}${esc(t.subjects.slice(0, 3).join(', '))}</div></td><td><span class="gtag">${esc(t.group)}</span></td><td class="r num">${t.n}</td><td class="r">${lvChip(levelOf(t.avg), t.avg)}</td><td class="r num">${f2(t.min)}</td><td>${spark(t.recs.map(r => r.avg))}</td><td class="num">${fmtD(t.last.day)}${Date.now() - t.last.ts < 7 * DAY ? `<div class="ts">${esc(ago(t.last.ts))}</div>` : ''}</td><td>${stackLv(t.lv, t.n, 8)}</td></tr>`).join('')}
+    ${ts.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th>${th('name', 'Giáo viên')}${th('group', 'Tổ')}${th('n', 'Số tiết', 'r')}${th('avg', 'Điểm TB', 'r')}${th('min', 'Thấp nhất', 'r')}<th>Diễn biến</th>${th('last', 'Lần gần nhất')}<th style="min-width:120px">Phân loại</th>${th('gn', 'Đã dự', 'r')}${th('gavg', 'TB đã chấm', 'r')}</tr></thead><tbody>
+    ${ts.map((t, i) => `<tr class="click" data-teacher="${esc(t.key)}"><td class="ts num">${i + 1}</td><td><div class="tn">${esc(t.name)}</div><div class="ts">${t.dup ? `${t.ma ? `Mã ${esc(t.ma)}` : 'Chưa xác định mã'} · ` : ''}${esc(t.subjects.slice(0, 3).join(', '))}</div></td><td><span class="gtag">${esc(t.group)}</span></td><td class="r num">${t.n}</td><td class="r">${lvChip(levelOf(t.avg), t.avg)}</td><td class="r num">${f2(t.min)}</td><td>${spark(t.recs.map(r => r.avg))}</td><td class="num">${fmtD(t.last.day)}${Date.now() - t.last.ts < 7 * DAY ? `<div class="ts">${esc(ago(t.last.ts))}</div>` : ''}</td><td>${stackLv(t.lv, t.n, 8)}</td><td class="r num">${t.gN || '<span class="ts">–</span>'}</td><td class="r num">${t.gAvg != null ? `${f2(t.gAvg)}<div class="ts" title="Chênh lệch so với TB chung của các phiếu trong kỳ">${signed(t.gAvg - gAll)}</div>` : '<span class="ts">–</span>'}</td></tr>`).join('')}
     </tbody></table></div>` : emptyHTML()}</div>`;
   $('#expT')?.addEventListener('click', () => downloadCSV(`ket-qua-giao-vien_${toISO(c.R.a)}_${toISO(c.R.b)}.csv`,
-    [['Giáo viên', 'Tổ', 'Môn', 'Số tiết', 'Điểm TB', 'Xếp loại TB', 'Thấp nhất', ...LEVELS.map(l => l.name), 'Lần gần nhất'],
-    ...ts.map(t => [t.name, t.group, t.subjects.join('; '), t.n, t.avg.toFixed(2), LVMAP[levelOf(t.avg)].name, t.min.toFixed(2), ...LEVELS.map(l => t.lv[l.key]), fmtD(t.last.day)])]));
+    [['Giáo viên', 'Tổ', 'Môn', 'Số tiết', 'Điểm TB', 'Xếp loại TB', 'Thấp nhất', ...LEVELS.map(l => l.name), 'Lần gần nhất', 'Số phiếu đã dự (chấm)', 'TB đã chấm', 'Chênh lệch so TB chung'],
+    ...ts.map(t => [t.name, t.group, t.subjects.join('; '), t.n, t.avg.toFixed(2), LVMAP[levelOf(t.avg)].name, t.min.toFixed(2), ...LEVELS.map(l => t.lv[l.key]), fmtD(t.last.day),
+      t.gN, csvNum2(t.gAvg), t.gAvg != null && gAll != null ? csvNum2(t.gAvg - gAll) : ''])]));
 }
 
 /* ---------- Dự giờ & độ phủ ---------- */
@@ -2686,8 +2709,28 @@ function openTeacher(key) {
       ${diffs.filter(k => k.diff > 0.005).slice(-3).reverse().map(k => `<div class="weak-item"><div class="rk up">▲</div><div><div class="ttl">${k.code}. ${esc(k.short)}</div><div class="ds">GV ${f2(k.avg)} · TB ${esc(cmp)} ${f2(k.avg - k.diff)}</div></div><div class="score" style="color:var(--up)">+${nf2.format(k.diff)}</div></div>`).join('')}
       ${diffs.slice(0, 3).filter(k => k.diff < -0.005).map(k => `<div class="weak-item"><div class="rk">▼</div><div><div class="ttl">${k.code}. ${esc(k.short)}</div><div class="ds">GV ${f2(k.avg)} · TB ${esc(cmp)} ${f2(k.avg - k.diff)}</div></div><div class="score" style="color:var(--down)">−${nf2.format(Math.abs(k.diff))}</div></div>`).join('')}
     </div></div>
+    ${givenSection(t, R, cmp)}
     <div class="p-sec"><h4>Các tiết đã được dự (${all.length})</h4><div class="tl">${all.slice().sort((a, b) => b.ts - a.ts).map(r => `<div class="tl-item" data-rec="${esc(r.id)}"><div class="top"><div><div class="ls">${esc(r.lesson)}</div><div class="mt">${WD[r.day.getDay()]}, ${fmtD(r.day)} · ${esc(r.subject)} · Lớp ${esc(r.cls)} · ${esc(r.period)} · Người dự: ${esc(r.on)}</div></div>${lvChip(r.level, r.avg)}</div>${!trivial(r.cons) ? `<div class="cm"><b>Cần khắc phục:</b> ${esc(r.cons)}</div>` : ''}</div>`).join('')}</div></div>`;
   openPanel(head, body);
+}
+
+// Hồ sơ GV – các phiếu GV đó chấm khi đi dự giờ đồng nghiệp (trong kỳ đang lọc; chưa có trong kỳ → toàn bộ).
+function givenSection(t, R, cmp) {
+  const all = givenFor(givenIndex(S.records), t).sort((a, b) => b.ts - a.ts);
+  const note = S.vkind === 'to' ? '<p class="ts" style="margin:-4px 0 10px">Chỉ tính các tiết của tổ đang xem.</p>' : '';
+  if (!all.length) return `<div class="p-sec"><h4>Khi đi dự giờ đồng nghiệp</h4>${note}<p class="ts">Chưa có phiếu nào do giáo viên này chấm.</p></div>`;
+  const inP = all.filter(r => r.day >= R.a && r.day <= R.b), use = inP.length ? inP : all;
+  const G = agg(use);
+  const pool = (inP.length ? inPeriod(R) : S.records).filter(r => r.cap === t.cap);
+  const base = agg(pool).avg;
+  return `<div class="p-sec"><h4>Khi đi dự giờ đồng nghiệp (${all.length} phiếu đã chấm)</h4>${note}
+    <div class="facts">
+      <div class="fact"><div class="l">${inP.length ? 'Phiếu đã chấm trong kỳ' : 'Tổng phiếu đã chấm'}</div><div class="v num">${use.length}${inP.length ? `<span class="ts"> / ${all.length} tổng</span>` : ''}</div></div>
+      <div class="fact"><div class="l">TB đã chấm</div><div class="v num">${f2(G.avg)}</div></div>
+      <div class="fact"><div class="l">So TB chung ${esc(cmp)}</div><div class="v num" title="TB chung: ${f2(base)}">${signed(G.avg - base)}</div></div></div>
+    ${inP.length ? '' : `<p class="ts" style="margin-top:8px">Chưa chấm phiếu nào trong kỳ đang lọc – hiển thị toàn bộ dữ liệu.</p>`}
+    <div style="margin:12px 0 6px" class="ts">Xếp loại đã cho</div>${stackLv(G.lv, G.n, 10)}
+    <div class="tl" style="margin-top:12px">${use.map(r => `<div class="tl-item" data-rec="${esc(r.id)}"><div class="top"><div><div class="ls">${esc(r.tn)} <span class="ts">· ${esc(r.tg)}</span></div><div class="mt">${WD[r.day.getDay()]}, ${fmtD(r.day)} · ${esc(r.subject)} · Lớp ${esc(r.cls)} · ${esc(r.lesson)}</div></div>${lvChip(r.level, r.avg)}</div></div>`).join('')}</div></div>`;
 }
 
 /* ======================= Tương tác chung ======================= */
